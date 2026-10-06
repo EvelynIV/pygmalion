@@ -12,24 +12,38 @@ from typing import Any
 from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 
-from ..core import db, printer
-from ..core.config import CONFIG, ROOT, PAPER_PRESETS
+from ..submissions import repository as submissions
+from ..jobs import repository as jobs
+from ..writing import prepare as preparation
+from ..config import CONFIG, ROOT, PAPER_PRESETS
 import logging
+from .workbench import router as workbench_router
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+router.include_router(workbench_router)
 
 
 def device_guard(function):
     @functools.wraps(function)
     def guarded(request: Request, *args, **kwargs):
         service = request.app.state.printer
-        if service.current or not service.device_lock.acquire(blocking=False):
+        realtime_owned = (
+            service.manual_control_lock.locked()
+            and request.scope.get("type") != "websocket"
+        )
+        if (
+            service.current
+            or realtime_owned
+            or not service.device_lock.acquire(blocking=False)
+        ):
             return JSONResponse(
                 {"ok": False, "error": "机器正在书写或处理另一项操作"}, status_code=409
             )
         try:
+            if function.__name__ not in ("api_jog", "api_machine"):
+                service.close_manual_connection()
             return function(request, *args, **kwargs)
         finally:
             service.device_lock.release()
@@ -115,9 +129,9 @@ def api_setup(request: Request):
     公开接口 —— 管理页要用它显示对位提示。不含任何机器控制能力，
     也不暴露路径。改原点角之后这里的文字会自动跟着变，不用改前端。
     """
-    from ..core import gcode
+    from ..machine import coordinates as gcode
 
-    cfg = printer.build_configs()
+    cfg = preparation.build_configs()
     tf = gcode.PageToMachine(cfg["machine"], cfg["page"])
     x0, y0, x1, y1 = tf.bounds()
     page = cfg["page"]
@@ -245,7 +259,7 @@ def api_set_grid_calibration(
             },
             status_code=400,
         )
-    from ..core import config as config_mod
+    from .. import config as config_mod
 
     saved = config_mod.save_section("page", cleaned)
     return {
@@ -376,7 +390,7 @@ def api_set_config(request: Request, data: dict[str, Any] = Body(default_factory
             },
             status_code=400,
         )
-    from ..core import config as config_mod
+    from .. import config as config_mod
 
     config_mod.save_section("machine", cleaned)
     return {
@@ -401,7 +415,7 @@ def api_estop(request: Request, data: dict[str, Any] = Body(default_factory=dict
     两种情况都不会把机器留在 Hold 状态 —— 那是之前的 bug，会让机器
     "按了没反应"。
     """
-    from ..core import grbl
+    from ..machine import grbl
 
     m = CONFIG["machine"]
     if request.app.state.printer.emergency_stop():
@@ -426,7 +440,7 @@ def api_recover(request: Request, data: dict[str, Any] = Body(default_factory=di
     防的就是"机器卡住了按什么都没反应" —— 这个接口只做恢复，
     不做任何运动（除了抬笔），随时可以安全地点。
     """
-    from ..core import grbl
+    from ..machine import grbl
 
     m = CONFIG["machine"]
     try:
@@ -452,7 +466,7 @@ def api_fonts(request: Request):
     可用字库列表。公开接口 —— 提交页也要用它给作者选字体。
     只暴露名字、字数这类展示信息，不含任何路径。
     """
-    from ..core import fonts as font_registry
+    from ..fonts import registry as font_registry
 
     available = font_registry.discover(ROOT)
     return {
@@ -506,7 +520,7 @@ def api_submit(request: Request, data: dict[str, Any] = Body(default_factory=dic
         direction = "vertical"
     if colophon not in ("none", "author", "full", "seal"):
         colophon = "none"
-    sub_id = db.add_submission(
+    sub_id = submissions.add_submission(
         author=author,
         title=title,
         body=body,
@@ -527,14 +541,14 @@ def api_my_preview(request: Request, sub_id: int):
     只回传预览，不回传别人的内容，也不暴露任何管理能力 ——
     知道 id 就能看排版，但看不到机器状态、也改不了任何东西。
     """
-    sub = db.get_submission(sub_id)
+    sub = submissions.get_submission(sub_id)
     if not sub:
         return JSONResponse(
             content={"ok": False, "error": "投稿不存在"}, status_code=404
         )
     try:
         fast_preview = request.query_params.get("fast") in ("1", "true", "True")
-        p = printer.prepare(sub, save_gcode=False, fast_preview=fast_preview)
+        p = preparation.prepare(sub, save_gcode=False, fast_preview=fast_preview)
     except Exception as exc:
         return JSONResponse(
             content={"ok": False, "error": f"排版失败: {exc}"}, status_code=500
@@ -568,7 +582,7 @@ def api_net(request: Request):
 @router.get("/api/admin/serial-ports", response_model=None)
 def api_serial_ports(request: Request):
     """列出系统串口；不打开设备、不发送串口数据。"""
-    from ..core import grbl
+    from ..machine import grbl
 
     return {
         "ok": True,
@@ -599,7 +613,7 @@ def api_set_serial_port(
         )
     else:
         port = port.upper()
-    from ..core import config as config_mod
+    from .. import config as config_mod
 
     config_mod.save_section("machine", {"port": port})
     return {"ok": True, "port": port}
@@ -619,17 +633,27 @@ def api_detect_serial_port(
             },
             status_code=409,
         )
-    from ..core import grbl
+    from ..machine import grbl
 
     baud = int(CONFIG["machine"].get("baud", 115200))
     checked = grbl.probe_grbl_ports(baud)
     matches = [item for item in checked if item.get("grbl")]
     if len(matches) != 1:
         if not matches:
+            failures = [
+                f"{item['device']}：{item.get('error') or '未识别到 GRBL'}"
+                for item in checked
+                if not item.get("skipped")
+            ]
+            detail = (
+                "；".join(failures)
+                if failures
+                else "没有可扫描的有线串口；蓝牙设备请手动选择"
+            )
             return JSONResponse(
                 content={
                     "ok": False,
-                    "error": "未检测到可响应的 GRBL 设备",
+                    "error": f"未检测到可响应的 GRBL 设备：{detail}",
                     "ports": checked,
                 },
                 status_code=404,
@@ -643,7 +667,7 @@ def api_detect_serial_port(
             status_code=409,
         )
     port = str(matches[0]["device"])
-    from ..core import config as config_mod
+    from .. import config as config_mod
 
     config_mod.save_section("machine", {"port": port})
     return {
@@ -659,20 +683,20 @@ def api_submissions(request: Request):
     status = request.query_params.get("status") or None
     if status == "all":
         status = None
-    rows = db.list_submissions(status=status)
-    return {"ok": True, "items": rows, "stats": db.stats()}
+    rows = submissions.list_submissions(status=status)
+    return {"ok": True, "items": rows, "stats": submissions.stats()}
 
 
 @router.get("/api/admin/preview/{sub_id}", response_model=None)
 def api_admin_preview(request: Request, sub_id: int):
-    sub = db.get_submission(sub_id)
+    sub = submissions.get_submission(sub_id)
     if not sub:
         return JSONResponse(
             content={"ok": False, "error": "投稿不存在"}, status_code=404
         )
     try:
         fast_preview = request.query_params.get("fast") in ("1", "true", "True")
-        p = printer.prepare(
+        p = preparation.prepare(
             sub,
             overrides_from_request(request.query_params),
             save_gcode=False,
@@ -701,7 +725,7 @@ def api_admin_preview(request: Request, sub_id: int):
 
 @router.get("/api/admin/submission/{sub_id}")
 def api_submission(sub_id: int):
-    item = db.get_submission(sub_id)
+    item = submissions.get_submission(sub_id)
     if not item:
         return JSONResponse({"ok": False, "error": "投稿不存在"}, status_code=404)
     return {"ok": True, "item": item, "layout": CONFIG["layout"]}
@@ -728,7 +752,7 @@ def api_job(request: Request, job_id: int):
     prog = request.app.state.printer.get(job_id)
     if not prog:
         archived = next(
-            (job for job in db.all_job_records() if job["job_id"] == job_id), None
+            (job for job in jobs.all_job_records() if job["job_id"] == job_id), None
         )
         if archived:
             return {"ok": True, "job": archived}
@@ -750,7 +774,7 @@ def api_jobs(request: Request):
 
 
 def merge_jobs(request: Request) -> list[dict]:
-    records = db.all_job_records()
+    records = jobs.all_job_records()
     live = {job.job_id: job.to_dict() for job in request.app.state.printer.all_jobs()}
     for record in records:
         if record["job_id"] in live:
@@ -773,9 +797,9 @@ def api_cancel(
 def api_delete(
     request: Request, sub_id: int, data: dict[str, Any] = Body(default_factory=dict)
 ):
-    if not db.get_submission(sub_id):
+    if not submissions.get_submission(sub_id):
         return JSONResponse({"ok": False, "error": "投稿不存在"}, status_code=404)
-    db.delete_submission(sub_id)
+    submissions.delete_submission(sub_id)
     return {"ok": True}
 
 
@@ -787,11 +811,11 @@ def api_machine(request: Request):
 
     这是唯一主动碰串口的只读接口。查不到就如实报错，不假装正常。
     """
-    from ..core import grbl
+    from ..machine import grbl
 
     m = CONFIG["machine"]
     try:
-        with grbl.GrblLink(m["port"], m["baud"], timeout=1.5) as link:
+        with request.app.state.printer.device_connection(m, reuse=True) as link:
             state = link.status()
             info = link.query("$I", max_lines=20)
             backup = grbl.latest_backup()
@@ -828,7 +852,7 @@ def api_jog(request: Request, data: dict[str, Any] = Body(default_factory=dict))
 
     所有动作都走"先备份再动"的闸门，且限制单次位移上限。
     """
-    from ..core import grbl
+    from ..machine import grbl
 
     data = data or {}
     if not isinstance(data.get("action"), str):
@@ -846,30 +870,14 @@ def api_jog(request: Request, data: dict[str, Any] = Body(default_factory=dict))
                 {"ok": False, "error": "单次点动应在 0.01–60 mm 内"}, status_code=400
             )
     m = CONFIG["machine"]
-    MAX_JOG = 60.0
     try:
-        with grbl.GrblLink(m["port"], m["baud"], timeout=2.0) as link:
-            grbl.ensure_backup_today(link, reason="手动点动前自动备份")
+        with request.app.state.printer.device_connection(m, reuse=True) as link:
+            backup, _ = grbl.ensure_backup_today(link, reason="手动点动前自动备份")
             if action in ("x", "y"):
-                try:
-                    dist = float(data.get("dist", 0))
-                except (TypeError, ValueError):
-                    return JSONResponse(
-                        content={"ok": False, "error": "位移不是数字"}, status_code=400
-                    )
-                if abs(dist) > MAX_JOG:
-                    return JSONResponse(
-                        content={
-                            "ok": False,
-                            "error": f"单次点动上限 {MAX_JOG:g}mm，收到 {abs(dist):g}mm",
-                        },
-                        status_code=400,
-                    )
-                if abs(dist) < 0.01:
-                    return JSONResponse(
-                        content={"ok": False, "error": "位移为 0"}, status_code=400
-                    )
-                link.run_program(["G91", f"G1 {action.upper()}{dist:g} F500", "G90"])
+                speed = float(m.get("jog_speed", 500))
+                link.run_program(
+                    ["G91", f"G1 {action.upper()}{distance:g} F{speed:g}", "G90"]
+                )
             elif action == "pen_down":
                 link.run_program([f"G1 Z{m['z_on']} F{m['z_speed']}"])
             elif action == "pen_up":
@@ -883,8 +891,14 @@ def api_jog(request: Request, data: dict[str, Any] = Body(default_factory=dict))
                     content={"ok": False, "error": f"不认识的动作: {action}"},
                     status_code=400,
                 )
-            st = link.wait_idle()
-            return {"ok": True, "action": action, "state": st}
+            st = link.wait_idle(poll=0.03)
+            return {
+                "ok": True,
+                "action": action,
+                "port": link.port,
+                "state": st,
+                "backup": str(backup),
+            }
     except Exception as exc:
         return JSONResponse(
             content={
@@ -905,7 +919,7 @@ def api_backup(request: Request):
     这也是"改前必须先备份"那条硬约束的入口 —— 任何时候都可以先点这个，
     拿到一份可以逐行发回去的完整快照。
     """
-    from ..core import grbl
+    from ..machine import grbl
 
     m = CONFIG["machine"]
     try:
@@ -925,7 +939,7 @@ def api_write_settings(
     request: Request, data: dict[str, Any] = Body(default_factory=dict)
 ):
     """默认离线预览；明确确认后备份并写入真实控制板。"""
-    from ..core import grbl
+    from ..machine import grbl
 
     changes = data.get("changes")
     if not isinstance(changes, dict) or not changes:

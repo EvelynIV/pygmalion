@@ -1,5 +1,5 @@
 """
-字库注册表 —— 发现 `data/fonts/` 下的中文字库，给出可读的名字和说明。
+字库注册表 —— 发现 `data-bin/cjk-*/train.parquet` 与旧 JSON 字库。
 
 设计目标
 --------
@@ -37,6 +37,7 @@ from pathlib import Path
 
 # 字库文件放哪、元数据叫什么
 FONTS_SUBDIR = "data/fonts"
+DATASETS_SUBDIR = "data-bin"
 META_FILE = "fonts.json"
 
 # 内置的默认元数据。用户没写 fonts.json 时用这套，保证开箱即用。
@@ -147,12 +148,10 @@ def discover(root: Path) -> list[FontInfo]:
     """
     扫描字库目录，返回所有可用的中文字库，按 order 排序。
 
-    只认 cjk-*.json —— 那是本项目转换后的格式。原始的 .hf.txt、元数据
-    fonts.json 之类的都不算。
+    识别 data-bin/cjk-*/train.parquet 和 data/fonts/cjk-*.json。
+    同名字库优先使用 Parquet，字体 ID 不随存储格式改变。
     """
     fonts_dir = root / FONTS_SUBDIR
-    if not fonts_dir.is_dir():
-        return []
 
     meta = _load_meta(fonts_dir)
     out: list[FontInfo] = []
@@ -174,10 +173,38 @@ def discover(root: Path) -> list[FontInfo]:
             )
         )
 
-    # GFont 是 CNC Draw 的私有二进制容器。先完整列出本机资产及版本，
-    # 未有验证过的解码器时绝不能伪造笔画或将未知数据送进机床。
+    from .dataset import load_parquet_font
+
+    for p in sorted((root / DATASETS_SUBDIR).glob("cjk-*/train.parquet")):
+        key = (str(p.parent), p.name)
+        if key not in _COUNT_CACHE:
+            data = load_parquet_font(p)
+            _COUNT_CACHE[key] = (
+                len(data),
+                sum(len(s) for ss in data.values() for s in ss),
+            )
+        chars, points = _COUNT_CACHE[key]
+        if not chars:
+            continue
+        name = p.parent.name
+        m = meta.get(name + ".json", {})
+        out = [f for f in out if f.id != name]
+        out.append(
+            FontInfo(
+                file=name + ".parquet",
+                label=m.get("label") or name,
+                sublabel=m.get("sublabel", ""),
+                notes=m.get("notes", ""),
+                chars=chars,
+                points=points,
+                order=int(m.get("order", 100)),
+                kind="parquet",
+            )
+        )
+
+    # GFont 是 CNC Draw 的私有二进制容器。
     from . import gfont
-    from .config import CONFIG
+    from ..config import CONFIG
 
     gfont_dir = CONFIG.get("fonts", {}).get("gfont_dir")
     for item in gfont.discover(root, gfont_dir):
@@ -206,39 +233,51 @@ def resolve_chain(root: Path, chosen: str | None) -> list[str]:
     退回默认字库。返回空列表表示一个字库都没有（调用方要能处理）。
     """
     # 只有已验证的单线字库能进入当前 Python 走笔链路。
-    available = [f for f in discover(root) if f.kind == "json" and f.available]
+    available = [
+        f for f in discover(root) if f.kind in ("json", "parquet") and f.available
+    ]
     if not available:
         return []
 
     chosen_file = None
     if chosen:
         for f in available:
-            if chosen in (f.id, f.file, f.label):
+            if chosen in (f.id, f.file, f.label, f.id + ".json"):
                 chosen_file = f.file
                 break
     if chosen_file is None:
-        chosen_file = (
-            DEFAULT_FONT
-            if any(f.file == DEFAULT_FONT for f in available)
-            else available[0].file
+        chosen_file = next(
+            (f.file for f in available if f.id == Path(DEFAULT_FONT).stem),
+            available[0].file,
         )
 
     # chinese-hershey-font 的楷体是从位图自动提取的单线骨架。它的上游原始
     # 路径本身就含交叉、重复和错误分笔（不是本项目的缩放/坐标错误）。常用字
     # 优先走笔顺数据，楷体仅补足未收录的生僻字，保证成品可读。
     if chosen_file == "cjk-kaiti.json" and DEFAULT_FONT != chosen_file:
-        chain = [DEFAULT_FONT, chosen_file]
+        chain = [
+            next(
+                (f.file for f in available if f.id == Path(DEFAULT_FONT).stem),
+                chosen_file,
+            ),
+            chosen_file,
+        ]
         chain.extend(f.file for f in available if f.file not in chain)
     else:
         chain = [chosen_file] + [f.file for f in available if f.file != chosen_file]
     fonts_dir = root / FONTS_SUBDIR
-    return [str(fonts_dir / name) for name in chain]
+    return [
+        str(root / DATASETS_SUBDIR / Path(name).stem / "train.parquet")
+        if name.endswith(".parquet")
+        else str(fonts_dir / name)
+        for name in chain
+    ]
 
 
 def selected_gfont(root: Path, chosen: str | None) -> Path | None:
     """返回当前选择的可读取 CNC Draw GFont；未选择时尊重配置默认值。"""
     from . import gfont
-    from .config import CONFIG
+    from ..config import CONFIG
 
     requested = chosen or CONFIG.get("fonts", {}).get("default") or ""
     directory = CONFIG.get("fonts", {}).get("gfont_dir")
@@ -255,7 +294,7 @@ def selected_gfont(root: Path, chosen: str | None) -> Path | None:
 
 def default_id(root: Path) -> str:
     """返回配置指定且可用的默认字体，缺失时安全退回开源字库。"""
-    from .config import CONFIG
+    from ..config import CONFIG
 
     configured = CONFIG.get("fonts", {}).get("default") or ""
     available = [font for font in discover(root) if font.available]
@@ -263,6 +302,6 @@ def default_id(root: Path) -> str:
         if configured in (font.id, font.file, font.label):
             return font.id
     for font in available:
-        if font.kind == "json" and font.file == DEFAULT_FONT:
+        if font.kind in ("json", "parquet") and font.id == Path(DEFAULT_FONT).stem:
             return font.id
     return available[0].id if available else ""

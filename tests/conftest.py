@@ -3,7 +3,10 @@ from copy import deepcopy
 import pytest
 from fastapi.testclient import TestClient
 
-from pygmalion.core import config, db, grbl, printer
+from pygmalion import config, storage
+from pygmalion.jobs import service as printer
+from pygmalion.machine import grbl
+from pygmalion.writing import prepare as preparation
 from pygmalion.web.app import WEB_DIST_DIR, create_app
 
 
@@ -14,12 +17,13 @@ def isolated_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "output")
     monkeypatch.setattr(config, "BACKUP_DIR", tmp_path / "backups")
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "data" / "poems.db")
+    monkeypatch.setattr(storage, "DB_PATH", tmp_path / "data" / "poems.db")
     monkeypatch.setattr(printer, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(preparation, "OUTPUT_DIR", tmp_path / "output")
     monkeypatch.setattr(grbl, "BACKUP_DIR", tmp_path / "backups")
     config.CONFIG.clear()
     config.CONFIG.update(deepcopy(config.DEFAULTS))
-    db.init_db()
+    storage.init_db()
     yield tmp_path
     config.CONFIG.clear()
     config.CONFIG.update(original)

@@ -1,7 +1,7 @@
 [project]
 name = "pygmalion"
 version = "0.1.0"
-description = "诗词自动书写工作台：投稿、排版、任务队列与 GRBL 机器控制"
+description = "通用单页写字机控制台：正文排版、真实笔画预览与 GRBL 机器控制"
 authors = [
     {name = "wangchenyu",email = "1542169671@qq.com"}
 ]
@@ -13,6 +13,8 @@ dependencies = [
     "typer>=0.15.1,<1.0.0",
     "pyserial>=3.5,<4.0.0",
     "Hershey-Fonts>=2.1.0,<3.0.0",
+    "websockets (>=15,<17)",
+    "datasets (>=5.1,<6)",
 ]
 
 [tool.poetry]

@@ -1,6 +1,7 @@
 # ---> Python
 
 data-bin/
+/data/
 model-bin/
 outputs/
 wandb/

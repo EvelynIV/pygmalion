@@ -9,10 +9,8 @@ export const statusNames: Record<JobStatus, string> = {
   cancelled: "已中止",
 };
 export const navigation = [
-  { key: "submissions", label: "投稿管理", href: "/admin" },
-  { key: "queue", label: "书写队列", href: "/admin/queue" },
+  { key: "layout", label: "书写工作台", href: "/" },
   { key: "machine", label: "机器控制", href: "/admin/machine" },
-  { key: "calibration", label: "纸张校准", href: "/admin/calibration" },
   { key: "settings", label: "参数设置", href: "/admin/settings" },
 ] as const;
 

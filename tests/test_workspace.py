@@ -4,7 +4,10 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from pygmalion.core import config, db, grbl, printer
+from pygmalion import config
+from pygmalion.submissions import repository as submissions
+from pygmalion.jobs import repository as jobs, service as printer
+from pygmalion.machine import grbl
 from pygmalion.web.app import create_app
 
 
@@ -55,7 +58,7 @@ def test_submission_preview_filter_delete_without_auth(client):
 )
 def test_invalid_submissions_do_not_persist(client, payload):
     assert client.post("/api/submit", json=payload).status_code == 400
-    assert db.stats()["total"] == 0
+    assert submissions.stats()["total"] == 0
 
 
 def test_calibration_bounds_and_atomic_settings(client, isolated_runtime):
@@ -99,7 +102,7 @@ def test_queue_freezes_program_machine_settings_and_survives_submission_delete(c
     frozen = list(service._prepared[job_id].gcode)
     config.CONFIG["machine"]["feed_rate"] = 100
     config.CONFIG["page"]["paper_offset_x_mm"] = -40
-    db.delete_submission(sub_id)
+    submissions.delete_submission(sub_id)
     service._simulate = lambda progress: setattr(progress, "sent", progress.total)
     service._run_job(job_id)
     job = client.get("/api/admin/jobs").json()["jobs"][0]
@@ -124,7 +127,7 @@ def test_cancel_during_simulation_remains_cancelled(client):
     worker.join(4)
     assert not worker.is_alive()
     assert service.get(job_id).status == "cancelled"
-    assert db.get_submission(sub_id)["status"] == "pending"
+    assert submissions.get_submission(sub_id)["status"] == "pending"
 
 
 def test_cancel_queued_job_never_sends(client):
@@ -275,9 +278,9 @@ def test_machine_backup_failure_prevents_parameter_writes(client, monkeypatch):
 def test_restart_cancels_unfinished_jobs_without_resuming(client):
     sub_id = submit(client)
     job_id = client.app.state.printer.submit(sub_id)
-    db.interrupt_unfinished_jobs()
-    assert db.all_job_records()[0]["status"] == "cancelled"
-    assert db.get_submission(sub_id)["status"] == "pending"
+    jobs.interrupt_unfinished_jobs()
+    assert jobs.all_job_records()[0]["status"] == "cancelled"
+    assert submissions.get_submission(sub_id)["status"] == "pending"
     assert client.app.state.printer.get(job_id).sent == 0
 
 
@@ -288,9 +291,9 @@ def test_rewriting_preserves_latest_submission_status(client):
     second = service.submit(sub_id)
     service._simulate = lambda progress: setattr(progress, "sent", progress.total)
     service._run_job(first)
-    assert db.get_submission(sub_id)["status"] == "queued"
+    assert submissions.get_submission(sub_id)["status"] == "queued"
     service.cancel(second)
-    assert db.get_submission(sub_id)["status"] == "pending"
+    assert submissions.get_submission(sub_id)["status"] == "pending"
 
 
 def test_job_history_remains_addressable_after_service_restart(client):
