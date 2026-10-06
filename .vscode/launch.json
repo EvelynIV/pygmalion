@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "backend",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "preLaunchTask": "web: build",
+      "args": ["pygmalion.web.app:app", "--host", "127.0.0.1", "--port", "8080"]
+    },
+    {
+      "name": "CLI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pygmalion.commands.app",
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env",
+      "args": ["serve"]
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "fileKey": "m1toyRcCag4OOsJNMebFDb",
+  "sidebar": {
+    "count": 121,
+    "width": 208,
+    "navHeight": 36,
+    "setId": "77:1421",
+    "variants": {
+      "submissions": "77:1198",
+      "queue": "77:1240",
+      "machine": "77:1290",
+      "calibration": "77:1340",
+      "settings": "77:1390"
+    },
+    "galleryId": "77:1422"
+  },
+  "themes": [
+    "白昼",
+    "夜间"
+  ],
+  "authentication": false,
+  "pages": {
+    "Vallum/submit": "8:2",
+    "Vallum/result": "8:447",
+    "Vallum/submissions": "8:874",
+    "Vallum/layout": "8:1071",
+    "Vallum/queue": "8:1609",
+    "Vallum/machine": "8:1751",
+    "Vallum/calibration": "8:1963",
+    "Vallum/settings": "8:2134",
+    "Abyssus/submit": "8:2295",
+    "Abyssus/result": "8:2732",
+    "Abyssus/submissions": "8:3159",
+    "Abyssus/layout": "8:3344",
+    "Abyssus/queue": "8:3882",
+    "Abyssus/machine": "8:4020",
+    "Abyssus/calibration": "8:4216",
+    "Abyssus/settings": "8:4387"
+  },
+  "semanticCollection": "VariableCollectionId:55:1021",
+  "tokens": 134,
+  "textStyles": 20,
+  "componentSets": 21
+}

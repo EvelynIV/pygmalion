@@ -1,0 +1,45 @@
+[project]
+name = "pygmalion"
+version = "0.1.0"
+description = "诗词自动书写工作台：投稿、排版、任务队列与 GRBL 机器控制"
+authors = [
+    {name = "wangchenyu",email = "1542169671@qq.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fastapi>=0.142.2,<0.143.0",
+    "uvicorn>=0.30.0,<1.0.0",
+    "typer>=0.15.1,<1.0.0",
+    "pyserial>=3.5,<4.0.0",
+    "Hershey-Fonts>=2.1.0,<3.0.0",
+]
+
+[tool.poetry]
+packages = [{include = "pygmalion", from = "src"}]
+
+[tool.poetry.scripts]
+app = "pygmalion.commands.app:app"
+
+[tool.poetry.dependencies]
+fastapi = {source = "pypi-fallback"}
+Hershey-Fonts = {source = "pypi-fallback"}
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0.0,<9.0.0"
+httpx = ">=0.28.1,<1.0.0"
+ruff = "^0.16.10"
+
+[[tool.poetry.source]]
+name = "pypi-fallback"
+url = "https://pypi.org/simple"
+priority = "primary"
+
+[[tool.poetry.source]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+priority = "supplemental"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
