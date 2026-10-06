@@ -9,8 +9,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 
-from ..core import config, db, printer
+from .. import config, storage
+from ..jobs import repository as jobs, service as printer
 from .api import router
+from .machine_socket import router as machine_router
 
 logger = logging.getLogger(__name__)
 WEB_DIST_DIR = Path(__file__).resolve().parents[2] / "web" / "dist"
@@ -22,8 +24,8 @@ def create_app(dist_dir: Path = WEB_DIST_DIR, dry_run: bool | None = None) -> Fa
         if not (dist_dir / "index.html").is_file():
             raise RuntimeError("前端构建不存在，请先在 src/web 执行 pnpm run build")
         config.ensure_dirs()
-        db.init_db()
-        db.interrupt_unfinished_jobs()
+        storage.init_db()
+        jobs.interrupt_unfinished_jobs()
         service = printer.PrinterService(
             dry_run=dry_run
             if dry_run is not None
@@ -37,8 +39,9 @@ def create_app(dist_dir: Path = WEB_DIST_DIR, dry_run: bool | None = None) -> Fa
         finally:
             service.stop()
 
-    application = FastAPI(title="Pygmalion · 诗词自动书写", lifespan=lifespan)
+    application = FastAPI(title="Pygmalion · 写字机控制台", lifespan=lifespan)
     application.include_router(router)
+    application.include_router(machine_router)
 
     @application.get("/api/health")
     def health():

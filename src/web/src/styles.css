@@ -8,40 +8,43 @@
   line-height: 20px;
   color-scheme: light;
   --background: #fafaf8;
-  --sidebar: #f7f7f5;
-  --header: #fbfbf9;
-  --text: #252724;
-  --secondary: #4b4b48;
-  --muted: #6c706a;
-  --line: #e3e5e1;
-  --selected: #e9eeeb;
-  --surface: #ffffff;
-  --danger: #9f3838;
-  --danger-line: #d9aaaa;
-  --success: #4f7162;
-  --queued: #826944;
-  --focus: #4c7264;
-  --sidebar-width: 208px;
+  --sidebar: var(--background);
+  --header: var(--background);
+  --text: #252a2a;
+  --secondary: #656c69;
+  --muted: #656c69;
+  --line: #d8dcd7;
+  --selected: #e3e9e5;
+  --surface: #fcfbf8;
+  --danger: #a96f74;
+  --danger-line: #a96f74;
+  --success: #6f8f83;
+  --queued: #b09464;
+  --focus: #78968f;
+  --accent: #afc2bc;
+  --primary-bg: #252a2a;
+  --primary-text: #f8f7f2;
+  --paper-bg: #f8f7f2;
+  --paper-ink: #252a2a;
+  --paper-line: #d8dcd7;
+  --sidebar-width: 44px;
   --content-width: 1140px;
   --control-height: 32px;
-  --radius: 5px;
+  --radius: 8px;
 }
-:root[data-theme="night"] {
+:root[data-theme="abyssus"] {
   color-scheme: dark;
-  --background: #1e2425;
-  --sidebar: #1b2122;
-  --header: #202728;
-  --text: #dbe2dd;
-  --secondary: #b8c2bc;
-  --muted: #9ba8a0;
-  --line: #39413d;
-  --selected: #303e37;
-  --surface: #27302d;
-  --danger: #e0a09b;
-  --danger-line: #805856;
-  --success: #95b6a2;
-  --queued: #c4b18d;
-  --focus: #9fc4e2;
+  --background: #080a0d;
+  --text: #e7eef4;
+  --secondary: #aab7c3;
+  --muted: #aab7c3;
+  --line: #273746;
+  --selected: #1d2b37;
+  --surface: #111820;
+  --accent: #9fc4e2;
+  --primary-bg: #9fc4e2;
+  --primary-text: #080a0d;
+  --focus: #789fbe;
 }
 * {
   box-sizing: border-box;
@@ -218,10 +221,10 @@ pre {
 .night-asset {
   display: none;
 }
-:root[data-theme="night"] .light-asset {
+:root[data-theme="abyssus"] .light-asset {
   display: none;
 }
-:root[data-theme="night"] .night-asset {
+:root[data-theme="abyssus"] .night-asset {
   display: inline;
 }
 .submission-access {
@@ -330,9 +333,9 @@ pre {
   border-color: var(--danger);
 }
 .button.primary {
-  background: var(--text);
-  color: var(--background);
-  border-color: var(--text);
+  background: var(--primary-bg);
+  color: var(--primary-text);
+  border-color: var(--primary-bg);
 }
 .button.primary:hover:not(:disabled) {
   opacity: 0.88;

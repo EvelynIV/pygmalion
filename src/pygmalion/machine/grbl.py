@@ -30,7 +30,7 @@ from typing import Callable, Iterable
 
 import serial  # pyserial
 
-from .config import BACKUP_DIR
+from ..config import BACKUP_DIR
 
 # GRBL 的串口接收缓冲区大小。发满就会丢字符，必须按这个数字做流控。
 RX_BUFFER_SIZE = 128
@@ -87,26 +87,49 @@ def serial_ports() -> list[dict[str, str | int | None]]:
 def probe_grbl_ports(
     baud: int = 115200, devices: Iterable[str] | None = None
 ) -> list[dict[str, object]]:
-    """用 `$I` 只读查询识别 GRBL，绝不发送运动或写入指令。"""
-    allowed = {str(item) for item in devices} if devices is not None else None
+    """用 `$I` 识别 GRBL；默认跳过蓝牙虚拟串口，可显式指定蓝牙设备。"""
+    allowed = (
+        {str(item).casefold() for item in devices} if devices is not None else None
+    )
     results: list[dict[str, object]] = []
     for info in serial_ports():
         device = str(info["device"])
-        if allowed is not None and device not in allowed:
+        if allowed is not None and device.casefold() not in allowed:
             continue
         result: dict[str, object] = dict(info)
         result.update({"reachable": False, "grbl": False, "firmware": "", "error": ""})
+        # Windows 蓝牙串口的打开阶段可能阻塞数秒；Serial.timeout 仅约束读取。
+        # 枚举中仍保留它们供手动选择，自动扫描不建立蓝牙连接。
+        hwid = str(info.get("hwid") or "").upper()
+        description = str(info.get("description") or "").upper()
+        if allowed is None and (
+            hwid.startswith("BTH")
+            or "BLUETOOTH" in description
+            or "蓝牙" in description
+        ):
+            result.update(
+                {"skipped": True, "error": "蓝牙虚拟串口不参与自动扫描，请手动选择"}
+            )
+            results.append(result)
+            continue
+        started = time.monotonic()
         ser: serial.Serial | None = None
+        lines: list[str] = []
         try:
             # 只读探测仍可能让某些 USB 串口板复位，因此由管理端显式触发，
             # 且服务有正在书写的任务时会拒绝调用此函数。
-            ser = serial.Serial(device, baud, timeout=0.45, write_timeout=1.0)
-            time.sleep(0.2)
-            ser.reset_input_buffer()
-            ser.write(b"\r\n$I\n")
-            deadline = time.monotonic() + 2.5
-            lines: list[str] = []
+            ser = serial.Serial(device, baud, timeout=0.15, write_timeout=1.0)
+            time.sleep(0.3)
+            # 不发空行：空行也产生 ok，旧实现会在 $I 的版本应答之前退出。
+            # 不清空启动信息：部分控制板打开串口后复位，欢迎信息也可识别 GRBL。
+            ser.write(b"$I\n")
+            deadline = time.monotonic() + 3.0
+            retry_at = time.monotonic() + 1.0
             while time.monotonic() < deadline:
+                if retry_at is not None and time.monotonic() >= retry_at:
+                    # 首次查询可能落在控制板启动期间；仅重试一次只读查询。
+                    ser.write(b"$I\n")
+                    retry_at = None
                 raw = ser.readline()
                 if not raw:
                     continue
@@ -114,21 +137,34 @@ def probe_grbl_ports(
                 if not line:
                     continue
                 lines.append(line)
-                if "Grbl" in line or line.startswith("[VER:"):
+                if "grbl" in line.casefold() or line.startswith("[VER:"):
                     result["grbl"] = True
                     result["firmware"] = line
-                if line.startswith("ok"):
+                # 缓冲区可能已有旧 ok；没有版本证据时不能据此结束探测。
+                if line == "ok" and result["grbl"]:
                     break
             result["reachable"] = bool(lines)
             if not result["firmware"] and lines:
                 result["firmware"] = lines[0]
             if not lines:
                 result["error"] = "无响应"
+            elif not result["grbl"]:
+                result["error"] = "设备有响应，但未返回 GRBL 版本信息"
         except (OSError, serial.SerialException) as exc:
             result["error"] = str(exc)
         finally:
             if ser and ser.is_open:
                 ser.close()
+        result["responses"] = lines
+        result["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+        logger.info(
+            "串口探测 %s：耗时 %s ms，GRBL=%s，应答=%r，错误=%s",
+            device,
+            result["elapsed_ms"],
+            result["grbl"],
+            lines,
+            result["error"],
+        )
         results.append(result)
     return results
 

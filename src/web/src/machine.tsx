@@ -1,4 +1,4 @@
-import { useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import {
   api,
   useResource,
@@ -7,7 +7,8 @@ import {
   type Machine,
   type Ports,
 } from "./api";
-import { Button, Dialog, Heading, Link, Notice, ResourceState } from "./ui";
+import { Button, Dialog, Heading, Notice, ResourceState } from "./ui";
+import { ControlError, MachineControl } from "./control";
 
 type Notify = (text: string, error?: boolean) => void;
 
@@ -20,33 +21,165 @@ export function MachinePage({
 }) {
   const ports = useResource<Ports>("/api/admin/serial-ports");
   const [port, setPort] = useState("");
-  const [inspect, setInspect] = useState(false);
-  const machine = useResource<Machine>(inspect ? "/api/admin/machine" : null);
+  const [machine, setMachine] = useState<Machine>();
+  const [machineError, setMachineError] = useState("");
+  const [reading, setReading] = useState(false);
   const [step, setStep] = useState(5);
   const [working, setWorking] = useState(false);
   const [zero, setZero] = useState(false);
-  const available = !!machine.data && !machine.error && !busy && !working;
-  async function action(path: string, payload?: object, label = "操作完成") {
+  const [connectionExpanded, setConnectionExpanded] = useState(true);
+  const [jogCount, setJogCount] = useState(0);
+  const pendingJogs = useRef(0);
+  const operating = useRef(false);
+  const mounted = useRef(true);
+  const busyRef = useRef(busy);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+  const [control] = useState(
+    () =>
+      new MachineControl(
+        (state) => {
+          setMachine((previous) =>
+            previous ? { ...previous, state } : previous,
+          );
+        },
+        (message) => {
+          setMachineError(message);
+        },
+        () => {
+          setMachine(undefined);
+        },
+      ),
+  );
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      control.close(false);
+    };
+  }, [control]);
+  const connected = !!machine && !machineError;
+  const available = connected && !busy && !working && jogCount === 0;
+  const jogAvailable = connected && !busy && !working && jogCount < 4;
+  function updatePosition(result: {
+    state?: Record<string, string>;
+    backup?: string;
+  }) {
+    setMachine((previous) =>
+      previous
+        ? {
+            ...previous,
+            state: result.state || previous.state,
+            backup: result.backup || previous.backup,
+          }
+        : previous,
+    );
+  }
+  async function action(
+    path: string,
+    payload?: object,
+    label = "操作完成",
+    propagate = false,
+  ) {
+    if (operating.current || pendingJogs.current || busyRef.current) {
+      if (propagate) throw new Error("请等待当前动作完成");
+      return;
+    }
+    operating.current = true;
     setWorking(true);
+    if (path === "/api/admin/machine") setReading(true);
     try {
-      const result = await api<{
+      type Result = {
         path?: string;
         port?: string;
         after?: string;
         state?: Record<string, string>;
-      }>(path, payload);
+        backup?: string;
+      };
+      const kinds: Record<string, string> = {
+        "/api/admin/machine": "inspect",
+        "/api/admin/jog": "jog",
+        "/api/admin/backup": "backup",
+        "/api/admin/recover": "recover",
+        "/api/admin/machine/disconnect": "disconnect",
+      };
+      let result: Result;
+      if (kinds[path]) {
+        result = await control.request<Result>(kinds[path], payload);
+      } else {
+        await control.disconnect();
+        result = await api<Result>(path, payload);
+      }
+      if (!mounted.current) return;
+      if (path === "/api/admin/machine") {
+        setMachine(result as Machine);
+        setMachineError("");
+      } else if (
+        path === "/api/admin/serial-port" ||
+        path === "/api/admin/serial-ports/detect"
+      ) {
+        setMachine(undefined);
+        setMachineError("");
+        setPort(result.port || "");
+        ports.reload();
+      } else {
+        updatePosition(result);
+        if (path === "/api/admin/recover") {
+          setMachine(await control.request<Machine>("inspect"));
+          setMachineError("");
+        }
+      }
       notify(
         `${label}${result.path ? `：${result.path}` : result.after ? `：${result.after}` : result.port ? `：${result.port}` : ""}`,
       );
-      ports.reload();
-      if (inspect) machine.reload();
     } catch (error) {
-      notify(error instanceof Error ? error.message : "设备操作失败", true);
+      if (!mounted.current) return;
+      const message = error instanceof Error ? error.message : "设备操作失败";
+      if (path === "/api/admin/machine" || path === "/api/admin/jog")
+        setMachineError(message);
+      notify(message, true);
+      if (propagate) throw error;
     } finally {
-      setWorking(false);
+      operating.current = false;
+      if (mounted.current) {
+        setWorking(false);
+        setReading(false);
+      }
     }
   }
-  const position = machine.data?.state.WPos || machine.data?.state.MPos;
+  async function enqueueJog(axis: "x" | "y", distance: number) {
+    if (
+      !connected ||
+      operating.current ||
+      busyRef.current ||
+      !mounted.current ||
+      pendingJogs.current >= 4
+    )
+      return;
+    pendingJogs.current += 1;
+    setJogCount(pendingJogs.current);
+    try {
+      const result = await control.request<{
+        state: Record<string, string>;
+        backup: string;
+      }>("jog", { action: axis, dist: distance });
+      if (mounted.current) updatePosition(result);
+    } catch (error) {
+      if (
+        mounted.current &&
+        !(error instanceof ControlError && error.cancelled)
+      ) {
+        const message = error instanceof Error ? error.message : "点动失败";
+        setMachineError(message);
+        notify(`${message}；待执行点动已取消，请重新读取设备状态`, true);
+      }
+    } finally {
+      pendingJogs.current -= 1;
+      if (mounted.current) setJogCount(pendingJogs.current);
+    }
+  }
+  const position = machine?.state.WPos || machine?.state.MPos;
   const axes = position?.split(",");
   return (
     <>
@@ -54,8 +187,16 @@ export function MachinePage({
         检测设备，将笔尖对到刻度区域左上角，再设置工作原点。
       </Heading>
       {busy && <Notice>机器正在书写，手动控制和串口扫描暂不可用。</Notice>}
-      <div className="tool-section">
-        <h2>串口与设备</h2>
+      <details
+        className="connection-drawer"
+        open={connectionExpanded}
+        onToggle={(event) => setConnectionExpanded(event.currentTarget.open)}
+      >
+        <summary>
+          连接信息 ·{" "}
+          {machineError ? "设备不可用" : machine?.state.state || "尚未读取"} ·{" "}
+          {machine?.port || ports.data?.configured_port || "—"}
+        </summary>
         <ResourceState
           loading={ports.loading}
           error={ports.error}
@@ -77,7 +218,7 @@ export function MachinePage({
             </select>
           </label>
           <Button
-            disabled={busy || working}
+            disabled={busy || working || jogCount > 0}
             onClick={() =>
               void action(
                 "/api/admin/serial-port",
@@ -89,7 +230,7 @@ export function MachinePage({
             保存串口
           </Button>
           <Button
-            disabled={busy || working}
+            disabled={busy || working || jogCount > 0}
             onClick={() =>
               void action("/api/admin/serial-ports/detect", {}, "设备已检测")
             }
@@ -97,59 +238,70 @@ export function MachinePage({
             检测串口
           </Button>
           <Button
-            disabled={busy || working}
-            onClick={() => {
-              setInspect(true);
-              machine.reload();
-            }}
+            disabled={busy || working || jogCount > 0}
+            onClick={() =>
+              void action("/api/admin/machine", undefined, "设备状态已读取")
+            }
           >
             读取设备状态
           </Button>
+          <Button
+            disabled={!machine || busy || working || jogCount > 0}
+            onClick={() =>
+              void action(
+                "/api/admin/machine/disconnect",
+                undefined,
+                "设备连接已断开",
+              )
+            }
+          >
+            断开连接
+          </Button>
         </div>
         <ResourceState
-          loading={machine.loading}
-          error={machine.error}
-          retry={machine.reload}
+          loading={reading}
+          error={machineError}
+          retry={() =>
+            void action("/api/admin/machine", undefined, "设备状态已读取")
+          }
         />
         <dl className="device-facts">
           <div>
             <dt>设备状态</dt>
             <dd>
-              {machine.error
-                ? "设备不可用"
-                : machine.data?.state.state || "尚未读取"}
+              {machineError ? "设备不可用" : machine?.state.state || "尚未读取"}
             </dd>
           </div>
           <div>
             <dt>连接</dt>
             <dd>
-              {machine.data?.port || ports.data?.configured_port || "—"} /{" "}
+              {machine?.port || ports.data?.configured_port || "—"} /{" "}
               {ports.data?.baud || "—"}
             </dd>
           </div>
           <div>
             <dt>固件</dt>
-            <dd>{machine.data?.firmware.join(" · ") || "—"}</dd>
+            <dd>{machine?.firmware.join(" · ") || "—"}</dd>
           </div>
           <div>
             <dt>最近备份</dt>
-            <dd title={machine.data?.backup || ""}>
-              {machine.data?.backup || "暂无备份"}
+            <dd title={machine?.backup || ""}>
+              {machine?.backup || "暂无备份"}
             </dd>
           </div>
         </dl>
-      </div>
+      </details>
       <div className="machine-workspace">
         <section className="tool-section">
-          <h2>点动与对位</h2>
+          <h2>点动</h2>
           <p className="muted">
-            以下操作直接控制真实设备。每次移动前先自动备份机器设置。
+            以下操作直接控制真实设备，移动前检查当天备份。连续点动按点击顺序执行。
           </p>
           <div className="coordinates">
             {["X", "Y", "Z"].map((axis, index) => (
               <div key={axis}>
                 <span>{axis}</span>
-                <strong>{machine.error ? "—" : axes?.[index] || "—"}</strong>
+                <strong>{machineError ? "—" : axes?.[index] || "—"}</strong>
                 <small>mm</small>
               </div>
             ))}
@@ -170,62 +322,54 @@ export function MachinePage({
           <div className="jog-pad">
             <Button
               className="jog-up"
-              disabled={!available}
+              disabled={!jogAvailable}
               aria-label={`Y 正向移动 ${step} 毫米`}
-              onClick={() =>
-                void action(
-                  "/api/admin/jog",
-                  { action: "y", dist: step },
-                  "Y 正向移动完成",
-                )
-              }
+              onClick={() => enqueueJog("y", step)}
             >
               ↑
             </Button>
             <Button
               className="jog-left"
-              disabled={!available}
+              disabled={!jogAvailable}
               aria-label={`X 负向移动 ${step} 毫米`}
-              onClick={() =>
-                void action(
-                  "/api/admin/jog",
-                  { action: "x", dist: -step },
-                  "X 负向移动完成",
-                )
-              }
+              onClick={() => enqueueJog("x", -step)}
             >
               ←
             </Button>
             <span>X / Y</span>
             <Button
               className="jog-right"
-              disabled={!available}
+              disabled={!jogAvailable}
               aria-label={`X 正向移动 ${step} 毫米`}
-              onClick={() =>
-                void action(
-                  "/api/admin/jog",
-                  { action: "x", dist: step },
-                  "X 正向移动完成",
-                )
-              }
+              onClick={() => enqueueJog("x", step)}
             >
               →
             </Button>
             <Button
               className="jog-down"
-              disabled={!available}
+              disabled={!jogAvailable}
               aria-label={`Y 负向移动 ${step} 毫米`}
-              onClick={() =>
-                void action(
-                  "/api/admin/jog",
-                  { action: "y", dist: -step },
-                  "Y 负向移动完成",
-                )
-              }
+              onClick={() => enqueueJog("y", -step)}
             >
               ↓
             </Button>
           </div>
+          <p className="muted" role="status">
+            {jogCount
+              ? `正在点动 · 等待 ${jogCount - 1} 次`
+              : "可连续点击方向，最多等待 3 次点动。"}
+          </p>
+          {jogCount > 1 && (
+            <Button
+              onClick={() => {
+                void control
+                  .request("cancel_pending")
+                  .catch((error: Error) => notify(error.message, true));
+              }}
+            >
+              取消待执行点动
+            </Button>
+          )}
           <div className="action-row">
             <Button
               disabled={!available}
@@ -265,21 +409,14 @@ export function MachinePage({
           </div>
         </section>
         <section className="tool-section">
-          <h2>校准与恢复</h2>
-          <p>
-            笔尖对齐刻度区域左上角后设置原点。纸张偏移在纸张校准页单独保存。
-          </p>
-          <Link className="button secondary" href="/admin/calibration">
-            纸张位置校准
-          </Link>
-          <div className="section-divider" />
+          <h2>机器维护</h2>
           <p>
             备份包含控制板参数、坐标和工作模式。恢复解除 Hold / Alarm
             并抬笔，不会自动续写。
           </p>
           <div className="action-row">
             <Button
-              disabled={busy || working}
+              disabled={busy || working || jogCount > 0}
               onClick={() =>
                 void action("/api/admin/backup", undefined, "机器设置已备份")
               }
@@ -287,7 +424,7 @@ export function MachinePage({
               备份机器设置
             </Button>
             <Button
-              disabled={busy || working}
+              disabled={busy || working || jogCount > 0}
               onClick={() => void action("/api/admin/recover", {}, "恢复结果")}
             >
               解除卡死 / 恢复
@@ -302,9 +439,12 @@ export function MachinePage({
           confirmLabel="设为原点"
           close={() => setZero(false)}
           confirm={async () => {
-            await api("/api/admin/jog", { action: "zero" });
-            machine.reload();
-            notify("当前位置已设为工作原点");
+            await action(
+              "/api/admin/jog",
+              { action: "zero" },
+              "当前位置已设为工作原点",
+              true,
+            );
           }}
         >
           确认笔尖位于刻度区域左上角。本操作将当前位置设置为 X0 / Y0。

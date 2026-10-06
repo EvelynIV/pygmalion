@@ -310,7 +310,7 @@ def smooth_strokes(strokes, **kwargs):
 
     role 等属性原样带过去 —— 平滑只改几何。
     """
-    from .layout import Stroke  # 放在这里避免循环导入
+    from .models import Stroke  # 放在这里避免循环导入
 
     out = []
     for s in strokes:

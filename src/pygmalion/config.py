@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(
-    os.environ.get("PYGMALION_HOME", Path(__file__).resolve().parents[3])
+    os.environ.get("PYGMALION_HOME", Path(__file__).resolve().parents[2])
 ).resolve()
 CONFIG_PATH = ROOT / "config.json"
 DATA_DIR = ROOT / "data"
@@ -42,7 +42,7 @@ DEFAULTS: dict[str, Any] = {
         "paper_preset": "A4",
         "origin": "top-left",
         "axes_swapped": True,
-        "invert_x": False,
+        "invert_x": True,  # 机器 X+ 朝纸张上方；页面向下必须取反。
         "invert_y": False,
         "offset_x": 0.0,
         "offset_y": 0.0,
@@ -219,7 +219,7 @@ def load() -> dict[str, Any]:
 
 def ensure_dirs() -> None:
     """建好运行时要用的目录。"""
-    for d in (DATA_DIR, OUTPUT_DIR, BACKUP_DIR, ROOT / "data" / "fonts"):
+    for d in (DATA_DIR, OUTPUT_DIR, BACKUP_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 

@@ -5,6 +5,7 @@ import "@fontsource-variable/noto-sans-sc";
 import "@fontsource-variable/atkinson-hyperlegible-mono";
 import App from "./App";
 import "./styles.css";
+import "./workbench.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

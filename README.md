@@ -1,6 +1,6 @@
-# Pygmalion · 诗词自动书写
+# Pygmalion · 写字机控制台
 
-用于诗词投稿、单线字形排版、书写任务队列与 GRBL 实体机器控制的工作区。管理入口直接打开，所有页面共用紧凑侧栏和固定任务状态栏。
+以单页书写工作台为中心的通用写字机控制台。直接编辑正文、预览真实单线字形并安排当前书写任务；无鉴权，保留机器控制与参数设置。UI 对齐 Figma 单页 V1。
 
 ## 启动
 
@@ -15,9 +15,9 @@ pnpm --dir src/web run build
 poetry run python -m pygmalion.commands.app serve
 ```
 
-成员投稿：<http://127.0.0.1:8080/>；管理工作区：<http://127.0.0.1:8080/admin>。
+书写工作台：<http://127.0.0.1:8080/>。旧 `/admin` 地址也打开同一工作台。
 
-需要同一局域网成员访问时，启动命令增加 `--host 0.0.0.0`；管理页显示本机发现的局域网投稿地址，可复制分享。
+需要局域网访问时，启动命令增加 `--host 0.0.0.0`。
 
 只演练书写队列：
 
@@ -27,31 +27,36 @@ poetry run python -m pygmalion.commands.app serve --dry-run
 
 演练只作用于书写任务。机器页的检测、点动、抬落笔、原点设置和恢复操作始终针对实际设备，界面按实际接口结果反馈。
 
-支持 `PYGMALION_HOST`、`PYGMALION_PORT`、`PYGMALION_DRY_RUN`、`PYGMALION_HOME`。运行数据根目录默认是仓库；使用 `--data-home` 指定另一目录时，字库位于该目录的 `data/fonts/`。`.env.example` 提供示例，VS Code 调试配置读取 `.env`。
+支持 `PYGMALION_HOST`、`PYGMALION_PORT`、`PYGMALION_DRY_RUN`、`PYGMALION_HOME`。运行数据根目录默认是仓库；使用 `--data-home` 指定另一目录时，需将 `data-bin/cjk-medians/` 复制到该目录。旧 JSON 字库仍兼容 `data/fonts/`。`.env.example` 提供示例，VS Code 调试配置读取 `.env`。
+
+内置字库使用标准 Hugging Face 数据集目录 `data-bin/cjk-medians/`，包含 `train.parquet`、`README.md` 和 `ARPHICPL.TXT`。Parquet 使用 Zstd 压缩和四位小数的定点整数，约 1.61 MiB，无损保留全部字形与笔顺。该目录已被 Git 忽略，新检出或部署时须单独提供，缺失时应用会提示缺字。
+
+```python
+from datasets import load_dataset
+
+glyphs = load_dataset("data-bin/cjk-medians", split="train")
+```
 
 ## 页面与行为
 
 | 页面 | 路径 | 行为 |
 | --- | --- | --- |
-| 成员投稿 | `/` | 姓名、诗题、正文、字库、方向、落款与署名 |
-| 投稿结果 | `/result/:id` | 投稿编号、真实笔画预览、缺字与加载提示 |
-| 投稿管理 | `/admin` | 状态筛选、统计、排版入口、删除和投稿地址分享 |
-| 排版工作台 | `/admin/layout/:id` | 字体、方向、落款、字号、间距、手写感与入队 |
-| 书写队列 | `/admin/queue` | 当前任务、排队、完成、失败和中止记录 |
-| 机器控制 | `/admin/machine` | 串口检测、坐标、点动、抬落笔、原点、备份和恢复 |
-| 纸张校准 | `/admin/calibration` | 纸张规格、刻度区、拖动与数值偏移、越界检查和独立保存 |
+| 书写工作台 | `/`、`/admin` | 文档名称、正文、单页预览、字体、方向、字号、间距、页边距与对齐 |
+| 机器控制 | `/admin/machine` | 可收起连接信息、串口检测、点动、抬落笔、原点、备份和恢复 |
 | 参数设置 | `/admin/settings` | 软件参数保存；GRBL 指令预览、备份与确认写入 |
 
-- 无登录页、口令、会话或鉴权接口；侧栏底部为“返回投稿”。
-- 侧栏 208px、菜单 36px、图标 16px、按钮 32px；主内容最大宽 1140px。白昼 / 夜间共用语义颜色、字体和组件结构，主题选择保存在浏览器。
-- 投稿和任务数量、网络地址、设备状态、发送进度均来自接口。仓库启动时不创建示例投稿。
-- “指令发送进度”是已发送指令占比。真实任务在机器返回 Idle 后才标记完成。
-- 入队时冻结生成的轨迹、纸张映射和机器参数。预览与书写使用同一套解析与随机种子；后续参数修改不会影响已入队任务。
-- 缺字具体列出；最终字形仍在加载或全部字符无法绘制时禁用书写。排版自动缩小时显示要求字号与实际字号。
-- 中止停止发送后续指令，缓冲区中的动作可能继续数秒；急停使用正在打开的串口发送实时停止与复位指令。重新书写创建新任务。
-- 删除投稿保留独立的冻结任务与历史，不自动停止书写。程序重启后未完成任务标记为已中止，不自动重发运动指令。
-- 校准只保存配置，不移动机器。软件参数与校准独立保存；控制板参数必须显式确认，且先完成备份才写入。
-- 小屏保留全部业务入口，排版切换预览 / 参数，校准支持触控拖动、键盘和等价数值输入。
+- 没有投稿、公开提交、队列或独立纸张校准页面。侧栏默认 44px 窄轨，可展开至 168px，导航文字 14px；头部 54px、底部任务栏 52px、紧凑控件 32px。
+- 白垣沿用已批准的中性控制台底色；苍渊使用技能锁定的深渊、夜海、铸铁与初光。双主题共用 DOM 和语义变量，主题与导航宽度保存在浏览器。
+- 初次打开为空文档，不创建示例数据。文档名称只用于保存和任务辨识，不参与纸面渲染。只写正文，保留空行、换行、缩进；长行按纸面可用范围换行。
+- V1 支持 A4 / A5 单张纸。超出范围时提示并禁用书写，不自动缩字、分页或截断；缺字、字形加载中、空白、预览失败同样禁止书写，服务端再次验证。
+- 保存会在当前浏览器保留最近一份文档，并导出 `.pygmalion.json` 文件。打开接受该 JSON 或 UTF-8 `.txt`；没有云端文档库。新建或打开前如有未保存修改，会要求确认；保存失败可重试。
+- 预览和落笔共用正文排版及真实字库笔画。页边距辅助线仅在 SVG 显示，不进入 G-code。书写时冻结正文、纸张参数、轨迹和机器参数；后续设置不影响已开始的任务。
+- V1 只允许一个活动书写任务。进度明确为“指令发送进度”，100% 后仍等机器返回 Idle 才完成。中止停止后续发送；急停保留原有真实控制结果。程序重启不自动续写。
+- 演练仅作用于书写任务；机器页的检测、点动、抬落笔和恢复仍为真实动作。浏览器与自动测试使用隔离运行目录及演练模式，不自动连接物理设备。
+- 机器页通过 WebSocket 复用控制连接、推送坐标；离开机器页释放串口，断线不重发运动。连接抽屉折叠后仍显示已读取的状态和端口。
+- 本次新增 `/api/workbench/preview` 与 `/api/workbench/write`。旧数据库与任务执行器保留兼容：书写时内部创建关联记录，但不会将其标题或作者送入新排版器，也不会在 UI 暴露旧投稿系统。
+
+[Figma 白垣单页基线](https://www.figma.com/design/m1toyRcCag4OOsJNMebFDb?node-id=8-1071) · [苍渊基线](https://www.figma.com/design/m1toyRcCag4OOsJNMebFDb?node-id=8-3344)
 
 ## 工程结构
 
@@ -59,10 +64,18 @@ poetry run python -m pygmalion.commands.app serve --dry-run
 src/pygmalion/commands/app.py  Typer CLI 与基础日志
 src/pygmalion/web/app.py      FastAPI 生命周期、API 与静态前端托管
 src/pygmalion/web/api.py      业务接口，保留参考项目 API 字段
-src/pygmalion/core/          SQLite、字库、排版、轨迹、GRBL 与单线程任务队列
+src/pygmalion/fonts/         字库发现、Hugging Face 数据集与字形来源
+src/pygmalion/writing/       排版、手写效果、平滑路径、SVG 预览与离线生成
+src/pygmalion/machine/       机器坐标转换、G-code 与 GRBL 通信
+src/pygmalion/submissions/   投稿存取
+src/pygmalion/jobs/          任务记录、进度与单线程执行队列
+src/pygmalion/storage.py     SQLite 连接、建表与迁移
+src/pygmalion/config.py      应用配置与运行目录
 src/web/src/                React / TypeScript 页面、共享组件与语义样式
 src/web/public/design/      Figma 导出的原始 SVG 图标和状态标记
-data/fonts/                中文单线字库与授权文件
+data-bin/cjk-medians/       Hugging Face Parquet 字库、数据集说明与授权（Git 忽略）
+data/                      本地运行数据库与可选兼容字库（Git 忽略）
+licenses/                  内置字库的授权条款
 tests/                     业务、任务和机器协议边界检查
 ```
 
@@ -87,14 +100,14 @@ pnpm --dir src/web run build
 pnpm --dir src/web run test:e2e
 ```
 
-浏览器检查使用本机 Chrome，Poetry 需在 PATH 中。测试服务使用 8097 端口、`.cache/e2e` 独立数据目录和任务演练模式，自动复制内置字库；不会调用真实运动接口。检查覆盖 320 / 390 / 768 / 1024 / 1440 / 1920px、长中文、共享导航、双主题、删除对话框键盘恢复、真实投稿入队、校准越界、软件参数保存与设备不可用反馈。
+浏览器检查使用本机 Chrome，Poetry 需在 PATH 中。测试服务使用 8097 端口、`.cache/e2e` 独立数据目录和任务演练模式，自动复制内置字库；不会调用真实运动接口。检查覆盖桌面 1024 / 1440 / 1920px、伸缩导航、双主题、文档保存与打开、确认对话框键盘恢复、真实笔画预览、单页溢出、缺字、预览失败恢复、演练中止、软件参数保存与 WebSocket 控制边界。
 
-本轮已通过 18 项后端检查、5 项浏览器流程，以及 lint、类型检查和构建。实体机器的行程、坐标、抬落笔与急停效果仍需连接设备后实机验证。
+验收命令见上方；测试覆盖通用正文与兼容接口，不连接实体机器。实体机器的行程、坐标、抬落笔与急停效果仍需连接设备后实机验证。
 
 ## 设计交接与来源
 
-[Figma 设计文件](https://www.figma.com/design/m1toyRcCag4OOsJNMebFDb?node-id=8-874) · [桌面原型](https://www.figma.com/proto/m1toyRcCag4OOsJNMebFDb?node-id=8-874&starting-point-node-id=8-874&scaling=scale-down) · [共享侧栏组件](https://www.figma.com/design/m1toyRcCag4OOsJNMebFDb?node-id=77-1421)
+[Figma 设计文件](https://www.figma.com/design/m1toyRcCag4OOsJNMebFDb?node-id=8-1071) · [桌面原型](https://www.figma.com/proto/m1toyRcCag4OOsJNMebFDb?node-id=8-1071&starting-point-node-id=8-1071&scaling=scale-down) · [共享侧栏组件](https://www.figma.com/design/m1toyRcCag4OOsJNMebFDb?node-id=77-1421)
 
-121 处设计稿侧栏已同步至五种选中状态的共享组件。设计中展示的数量、地址和进度用于说明布局，代码按实际数据呈现。实现以 MANAS 操作关系组织连续工作表面，桌面视觉采用用户最新要求的中性灰 Console 语义扩展。
+实现对齐单页 V1 的三列编辑工作台与三项导航。设计稿示例正文、端口和进度只用于布局，代码初次打开为空文档，设备与任务状态按实际数据呈现。MANAS 组织操作关系，苍渊·白垣负责主题角色；纸面实际笔画取代稿中的文字排版示意。
 
-业务逻辑迁入自 `handwriting-plotter`，改用 Poetry / Typer / FastAPI / React 架构并删除鉴权。保留原项目 MIT 授权；内置汉字笔画数据的 Arphic 授权见 `data/fonts/ARPHICPL.TXT`。不复制原项目的投稿数据库、机器配置或私有 GFont 运行环境。
+业务逻辑迁入自 `handwriting-plotter`，改用 Poetry / Typer / FastAPI / React 架构并删除鉴权。保留原项目 MIT 授权；内置汉字笔画数据的 Arphic 授权见 `licenses/ARPHICPL.TXT`，数据集目录也附有副本。不复制原项目的投稿数据库、机器配置或私有 GFont 运行环境。
