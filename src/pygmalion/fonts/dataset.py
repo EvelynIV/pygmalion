@@ -7,7 +7,9 @@ from datasets import load_dataset
 COORDINATE_SCALE = 10_000
 
 
-def load_parquet_font(path: Path) -> dict[str, list[list[list[float]]]]:
+def load_parquet_font(
+    path: Path, *, preserve_origins: set[str] | None = None
+) -> dict[str, list[list[list[float]]]]:
     dataset = load_dataset(
         "parquet", data_files={"train": str(path.resolve())}, split="train"
     )
@@ -29,4 +31,6 @@ def load_parquet_font(path: Path) -> dict[str, list[list[list[float]]]]:
         if row["char"] in result:
             raise ValueError(f"重复字形：{row['char']}")
         result[row["char"]] = strokes
+        if preserve_origins is not None and row.get("preserve_origin", False):
+            preserve_origins.add(row["char"])
     return result

@@ -512,11 +512,7 @@ function LayoutEditor({
             kind="primary"
             className="full-width"
             disabled={
-              !final?.can_print ||
-              final.pending_gfont ||
-              !!preview.error ||
-              printing ||
-              submitted
+              !final?.can_print || !!preview.error || printing || submitted
             }
             onClick={() => void print()}
           >

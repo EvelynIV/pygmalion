@@ -3,11 +3,8 @@ import pytest
 from pygmalion import config
 from pygmalion.jobs import repository as jobs
 from pygmalion.submissions import repository as submissions
-from pygmalion.writing.document import (
-    DocumentRequest,
-    layout_document,
-    prepare_document,
-)
+from pygmalion.schemas.document import DocumentRequest
+from pygmalion.writing.document import layout_document, prepare_document
 
 
 def test_document_preserves_blank_lines_indent_and_name_is_not_printed():
@@ -86,7 +83,7 @@ def test_single_active_task_freezes_preview_and_machine_configuration(client):
     response = client.post("/api/workbench/write", json=values)
     assert response.status_code == 200
     job_id = response.json()["job_id"]
-    service = client.app.state.printer
+    service = client.app.state.services.printer
     frozen = service._prepared[job_id]
     assert frozen.gcode == expected.gcode and frozen.svg == expected.svg
     assert frozen.poem.body == values["body"]
@@ -104,3 +101,12 @@ def test_page_and_preview_guide_never_enter_gcode():
     assert "stroke-dasharray" in a.svg
     assert a.strokes > 0 and a.can_print
     assert all("rect" not in line and "操作前检查" not in line for line in a.gcode)
+
+
+def test_non_dataset_characters_block_writing(client):
+    values = {"body": "甲A1!"}
+    preview = client.post("/api/workbench/preview", json=values).json()
+    assert preview["missing"] == ["A", "1", "!"]
+    assert preview["strokes"] > 0 and not preview["can_print"]
+    assert client.post("/api/workbench/write", json=values).status_code == 400
+    assert submissions.stats()["total"] == 0

@@ -258,9 +258,6 @@ export function PreviewNotes({ preview }: { preview?: Preview }) {
   if (!preview) return null;
   return (
     <div className="preview-notes">
-      {preview.pending_gfont && (
-        <Notice>最终字形加载中，完成后才能书写。</Notice>
-      )}
       {preview.shrunk && (
         <Notice>
           字号由 {preview.requested_size} mm 自动缩小至 {preview.font_size_mm}{" "}
@@ -276,7 +273,7 @@ export function PreviewNotes({ preview }: { preview?: Preview }) {
       {preview.warnings.map((warning, i) => (
         <Notice key={i}>{warning}</Notice>
       ))}
-      {preview.can_print === false && !preview.pending_gfont && (
+      {preview.can_print === false && (
         <Notice error>没有可绘制的字符，无法开始书写。</Notice>
       )}
     </div>
