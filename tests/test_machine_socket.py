@@ -96,7 +96,7 @@ def test_socket_orders_rapid_directions_reuses_serial_and_backup(client, fake_ma
         assert len(links) == len(backups) == 1
         assert links[0].is_open
     assert not links[0].is_open
-    assert not client.app.state.printer.manual_control_lock.locked()
+    assert not client.app.state.services.machine.manual_control_lock.locked()
 
 
 def test_socket_limits_pending_moves(client, fake_machine):
@@ -185,7 +185,7 @@ def test_socket_validates_before_opening_machine(client, fake_machine, payload):
 
 def test_socket_refuses_motion_while_printing(client, fake_machine):
     links, programs, _, _, _ = fake_machine
-    service = client.app.state.printer
+    service = client.app.state.services.printer
     service._current = object()
     try:
         with client.websocket_connect("/api/admin/machine/ws") as socket:
@@ -236,10 +236,10 @@ def test_serial_failure_closes_link_and_drops_pending(
 
 def test_print_connection_releases_manual_port_before_opening(client, fake_machine):
     links, _, _, _, _ = fake_machine
-    service = client.app.state.printer
-    with service.device_connection(config.CONFIG["machine"], reuse=True):
+    service = client.app.state.services.printer
+    with service.controller.device_connection(config.CONFIG["machine"], reuse=True):
         pass
-    with service.device_connection(config.CONFIG["machine"]):
+    with service.controller.device_connection(config.CONFIG["machine"]):
         assert not links[0].is_open and links[1].is_open
     assert not links[1].is_open
 

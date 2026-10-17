@@ -5,12 +5,12 @@
       "name": "backend",
       "type": "debugpy",
       "request": "launch",
-      "module": "uvicorn",
+      "module": "pygmalion.commands.app",
       "console": "integratedTerminal",
       "justMyCode": false,
       "envFile": "${workspaceFolder}/.env",
       "preLaunchTask": "web: build",
-      "args": ["pygmalion.web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+      "args": ["serve"]
     },
     {
       "name": "CLI",

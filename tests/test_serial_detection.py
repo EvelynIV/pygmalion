@@ -145,9 +145,9 @@ def test_detection_api_includes_port_failure_in_message(client, serial_probe):
 
 def test_detection_api_never_opens_port_during_writing(client, serial_probe):
     opened, _ = serial_probe
-    client.app.state.printer._current = object()
+    client.app.state.services.printer._current = object()
     try:
         assert client.post("/api/admin/serial-ports/detect", json={}).status_code == 409
         assert opened == []
     finally:
-        client.app.state.printer._current = None
+        client.app.state.services.printer._current = None

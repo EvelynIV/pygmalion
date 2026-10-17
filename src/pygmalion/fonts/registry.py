@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .sources import CJKSource
 
-DEFAULT_FONT = "cjk-medians"
+DEFAULT_FONT = "cjk-medians-plus"
 
 
 @dataclass
@@ -51,7 +51,12 @@ def dataset_dir(root: Path) -> Path:
 def discover(root: Path) -> list[FontInfo]:
     fonts = []
     base = dataset_dir(root)
-    paths = sorted(base.rglob("train.parquet"))
+    # 离线生成目录通过校验后才重命名发布，不能提前暴露半成品。
+    paths = sorted(
+        path
+        for path in base.rglob("train.parquet")
+        if not path.parent.name.endswith(".building")
+    )
     names = Counter(path.parent.name for path in paths)
     for path in paths:
         source = CJKSource(path)
@@ -63,7 +68,9 @@ def discover(root: Path) -> list[FontInfo]:
             FontInfo(
                 file=font_id + ".parquet",
                 dataset_path=path,
-                label="宋体" if path.parent.name == DEFAULT_FONT else path.parent.name,
+                label={"cjk-medians": "宋体", DEFAULT_FONT: "中文单线·扩展"}.get(
+                    name, name
+                ),
                 chars=len(source),
                 points=source.points,
             )

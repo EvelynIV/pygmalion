@@ -52,6 +52,7 @@ def build_configs(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         feed_rate=float(ov.get("feed_rate", m["feed_rate"])),
         jog_speed=float(ov.get("jog_speed", m["jog_speed"])),
         stroke_delay=float(ov.get("stroke_delay", m.get("stroke_delay", 0.0))),
+        table_segment_mm=float(m.get("table_segment_mm", 5.0)),
         # 坐标转换参数。这几项必须靠标定确定，不要凭猜。
         swap_xy=p["axes_swapped"],
         invert_x=p.get("invert_x", True),
@@ -164,6 +165,8 @@ class Prepared:
     gcode_path: str = ""
     machine_snapshot: dict[str, Any] = field(default_factory=dict)
     font: str = ""  # 实际选用的字库 id
+    layout: list[dict] = field(default_factory=list)
+    diagnostics: list[dict] = field(default_factory=list)
     blocked: bool = False  # 通用单页入口：缺字或超出纸面时禁止落笔
 
     @property

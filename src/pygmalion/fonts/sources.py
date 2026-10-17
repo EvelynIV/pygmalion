@@ -1,7 +1,7 @@
 """仅从 Hugging Face Parquet 数据集加载单线字形。"""
 
-from pathlib import Path
 import threading
+from pathlib import Path
 from typing import Protocol
 
 from .dataset import load_parquet_font
@@ -29,18 +29,20 @@ class CJKSource:
         key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
         with _CACHE_LOCK:
             if key not in _DATA_CACHE:
-                raw = load_parquet_font(path)
-                _DATA_CACHE[key] = {
-                    ch: self._center_ink(
-                        [
-                            [(float(x), float(y)) for x, y in stroke]
-                            for stroke in strokes
-                            if len(stroke) >= 2
-                        ]
-                    )
-                    for ch, strokes in raw.items()
-                    if any(len(stroke) >= 2 for stroke in strokes)
-                }
+                preserve_origins: set[str] = set()
+                raw = load_parquet_font(path, preserve_origins=preserve_origins)
+                glyphs = {}
+                for ch, strokes in raw.items():
+                    polys = [
+                        [(float(x), float(y)) for x, y in stroke]
+                        for stroke in strokes
+                        if len(stroke) >= 2
+                    ]
+                    if polys:
+                        glyphs[ch] = (
+                            polys if ch in preserve_origins else self._center_ink(polys)
+                        )
+                _DATA_CACHE[key] = glyphs
             self._data = _DATA_CACHE[key]
 
     @staticmethod

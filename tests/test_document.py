@@ -3,11 +3,8 @@ import pytest
 from pygmalion import config
 from pygmalion.jobs import repository as jobs
 from pygmalion.submissions import repository as submissions
-from pygmalion.writing.document import (
-    DocumentRequest,
-    layout_document,
-    prepare_document,
-)
+from pygmalion.schemas.document import DocumentRequest
+from pygmalion.writing.document import layout_document, prepare_document
 
 
 def test_document_preserves_blank_lines_indent_and_name_is_not_printed():
@@ -86,7 +83,7 @@ def test_single_active_task_freezes_preview_and_machine_configuration(client):
     response = client.post("/api/workbench/write", json=values)
     assert response.status_code == 200
     job_id = response.json()["job_id"]
-    service = client.app.state.printer
+    service = client.app.state.services.printer
     frozen = service._prepared[job_id]
     assert frozen.gcode == expected.gcode and frozen.svg == expected.svg
     assert frozen.poem.body == values["body"]

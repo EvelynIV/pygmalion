@@ -231,20 +231,6 @@
   font-size: 12px;
   white-space: nowrap;
 }
-.single-page-columns {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 304px minmax(0, 1fr) 272px;
-  gap: 24px;
-}
-.body-editor {
-  min-height: 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
 .panel-heading {
   display: flex;
   align-items: center;
@@ -264,27 +250,6 @@
 .panel-heading > span {
   font-size: 12px;
   white-space: nowrap;
-}
-.body-editor textarea {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-  resize: none;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  background: transparent;
-  border-radius: 0;
-  padding: 12px 0;
-  font-size: 14px;
-  line-height: 26px;
-}
-.body-editor textarea::placeholder {
-  color: var(--muted);
-}
-.editor-note {
-  font-size: 12px;
-  line-height: 20px;
-  flex-shrink: 0;
 }
 .page-preview {
   min-width: 0;
@@ -418,6 +383,16 @@ select option {
   font-size: 12px;
   color: var(--muted);
 }
+
+.number-field-error {
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dimension-value:has(input[aria-invalid="true"]) {
+  border-color: var(--danger-line);
+}
 .flat-choices {
   display: flex;
   gap: 8px;
@@ -472,9 +447,6 @@ select option {
   font-size: 12px;
 }
 @media (max-width: 1200px) {
-  .single-page-columns {
-    grid-template-columns: 220px minmax(0, 1fr) 240px;
-  }
   .document-name {
     width: 200px;
   }
@@ -485,9 +457,6 @@ select option {
   }
   .single-page-workbench {
     min-height: 900px;
-  }
-  .single-page-columns {
-    grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1fr);
   }
   .single-page-inspector {
     grid-column: 1 / -1;
@@ -533,13 +502,6 @@ select option {
   .document-name {
     width: calc(100% - 54px);
   }
-  .single-page-columns {
-    display: flex;
-    flex-direction: column;
-  }
-  .body-editor {
-    min-height: 320px;
-  }
   .page-preview {
     min-height: 440px;
   }
@@ -558,4 +520,413 @@ select option {
     gap: 0;
     font-size: 11px;
   }
+}
+
+/* 纸面编排：纸张是主任务面，检查器随选择变化。 */
+.canvas-workbench {
+  max-width: none;
+  gap: 12px;
+}
+.canvas-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 36px;
+}
+.canvas-tools .button {
+  padding-inline: 12px;
+}
+.tool-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  margin-inline: 4px;
+}
+.canvas-zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-left: auto;
+}
+.canvas-zoom select {
+  width: 112px;
+  height: 32px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  border-radius: 0;
+  padding: 0 8px;
+}
+.canvas-tools > .muted {
+  font-size: 12px;
+}
+.canvas-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 272px;
+  gap: 24px;
+  min-height: 0;
+  flex: 1;
+}
+.canvas-stage {
+  display: block;
+  overflow: auto;
+  padding: 16px;
+  background: var(--surface);
+  position: relative;
+}
+.canvas-paper {
+  margin: 0 auto;
+  overflow: visible;
+  box-sizing: content-box;
+  isolation: isolate;
+}
+.canvas-paper > img {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+}
+.canvas-paper .empty-margin-guide {
+  pointer-events: none;
+}
+.paper-element {
+  position: absolute;
+  border: 1px solid transparent;
+  box-sizing: border-box;
+}
+.paper-element.selected {
+  outline: 1px solid var(--paper-ink);
+  z-index: 2;
+}
+.paper-element.element-invalid {
+  outline: 1px solid var(--danger);
+}
+.text-hit-target,
+.cell-hit-target {
+  display: block;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: text;
+}
+.text-hit-target span {
+  display: block;
+  color: var(--paper-ink);
+  opacity: 0.5;
+  font-size: 12px;
+  padding: 12px;
+}
+.text-hit-target:focus-visible,
+.cell-hit-target:focus-visible {
+  outline: 2px solid var(--paper-ink);
+  outline-offset: -3px;
+}
+.paper-element:not(.selected):hover {
+  outline: 1px dashed var(--muted);
+}
+.paper-table {
+  position: absolute;
+  inset: 0;
+}
+.paper-cell {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed color-mix(in srgb, var(--paper-ink) 20%, transparent);
+}
+.paper-cell.cell-selected {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  outline: 1px solid var(--paper-ink);
+  outline-offset: -1px;
+}
+.paper-cell.cell-invalid {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  outline: 1px solid var(--danger);
+}
+.paper-inline-editor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  resize: none;
+  border: 1px solid var(--paper-ink);
+  border-radius: 0;
+  padding: 2px;
+  background: var(--paper-bg);
+  color: var(--paper-ink);
+  line-height: 1.35;
+  z-index: 5;
+}
+.element-grip {
+  position: absolute;
+  left: -1px;
+  top: -25px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  cursor: move;
+  touch-action: none;
+  white-space: nowrap;
+}
+.element-resize {
+  position: absolute;
+  bottom: -5px;
+  right: -5px;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 1px solid var(--paper-ink);
+  background: var(--surface);
+  border-radius: 0;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 7;
+}
+.track-handle {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  touch-action: none;
+  z-index: 4;
+}
+.track-handle.col {
+  width: 8px;
+  height: 100%;
+  top: 0;
+  margin-left: -4px;
+  cursor: col-resize;
+}
+.track-handle.row {
+  height: 8px;
+  width: 100%;
+  left: 0;
+  margin-top: -4px;
+  cursor: row-resize;
+}
+.track-handle:hover,
+.track-handle:focus-visible {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.canvas-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.canvas-inspector details {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+}
+.canvas-inspector summary {
+  cursor: pointer;
+  font-size: 14px;
+  padding-bottom: 12px;
+}
+.canvas-inspector fieldset {
+  gap: 16px;
+}
+.canvas-inspector h2 {
+  margin: 0;
+}
+.canvas-inspector .muted {
+  font-size: 12px;
+  line-height: 20px;
+}
+.canvas-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.canvas-checkbox input {
+  width: 16px;
+  height: 16px;
+}
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.table-actions .button {
+  padding-inline: 10px;
+  font-size: 12px;
+}
+.inspector-empty {
+  padding: 12px 0;
+}
+@media (max-width: 900px) {
+  .canvas-columns {
+    grid-template-columns: minmax(0, 1fr) 224px;
+    gap: 16px;
+  }
+  .canvas-workbench {
+    min-height: 0;
+  }
+  .console-v1 .workbench-main:has(.canvas-workbench) {
+    overflow: hidden;
+  }
+  .canvas-inspector fieldset {
+    display: flex;
+  }
+}
+@media (max-width: 650px) {
+  .canvas-columns {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+  .canvas-columns .page-preview {
+    min-height: 420px;
+    flex: 1;
+  }
+  .canvas-inspector {
+    max-height: 280px;
+    flex-shrink: 0;
+    overflow: auto;
+    padding-bottom: 12px;
+  }
+  .canvas-tools {
+    gap: 4px;
+  }
+  .canvas-tools > .muted {
+    display: none;
+  }
+  .canvas-zoom {
+    margin-left: 0;
+  }
+  .canvas-workbench .document-name {
+    width: 160px;
+  }
+  .canvas-workbench .document-toolbar {
+    flex-wrap: wrap;
+    height: auto;
+  }
+  .canvas-workbench .document-actions {
+    margin-left: auto;
+  }
+}
+
+.inspector-toggle {
+  display: none;
+}
+@media (max-width: 650px) {
+  .inspector-toggle {
+    display: inline-flex;
+  }
+  .canvas-columns .canvas-inspector {
+    display: none;
+  }
+  .canvas-columns.inspector-open .canvas-inspector {
+    display: flex;
+  }
+}
+
+.track-handle:focus-visible {
+  outline: 2px solid var(--paper-ink);
+  outline-offset: -2px;
+}
+
+/* 刻度尺与纸面共用毫米坐标，固定在可滚动视口的边缘。 */
+.paper-viewport {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-rows: 32px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.paper-viewport > .canvas-stage {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+}
+.ruler-corner {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--muted);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.paper-ruler {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  background: var(--background);
+  color: var(--muted);
+}
+.paper-ruler.horizontal {
+  grid-column: 2;
+  grid-row: 1;
+  border-bottom: 1px solid var(--line);
+}
+.paper-ruler.vertical {
+  grid-column: 1;
+  grid-row: 2;
+  border-right: 1px solid var(--line);
+}
+.paper-ruler line {
+  stroke: currentColor;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.paper-ruler text {
+  fill: currentColor;
+  stroke: none;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.paper-ruler .ruler-cursor {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+.paper-coordinate-readout {
+  font-variant-numeric: tabular-nums;
+}
+.canvas-paper {
+  border: 0;
+  outline: 1px solid var(--paper-line);
+}
+.canvas-paper.invalid {
+  outline-color: var(--danger);
+}
+
+.canvas-stage {
+  overflow: scroll;
+}
+.canvas-stage.hand-tool,
+.canvas-stage.hand-tool * {
+  cursor: grab !important;
+  user-select: none;
+}
+.canvas-stage.hand-tool {
+  touch-action: none;
+}
+.canvas-stage.hand-tool .paper-element {
+  pointer-events: none;
+}
+.canvas-stage.hand-tool.is-panning,
+.canvas-stage.hand-tool.is-panning * {
+  cursor: grabbing !important;
+}
+.canvas-tools .button[aria-pressed="true"] {
+  border-bottom: 2px solid var(--text);
 }

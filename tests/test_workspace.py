@@ -8,7 +8,7 @@ from pygmalion import config
 from pygmalion.submissions import repository as submissions
 from pygmalion.jobs import repository as jobs, service as printer
 from pygmalion.machine import grbl
-from pygmalion.web.app import create_app
+from pygmalion.api.app import create_app
 
 
 def submit(client, **values):
@@ -97,7 +97,7 @@ def test_calibration_bounds_and_atomic_settings(client, isolated_runtime):
 
 def test_queue_freezes_program_machine_settings_and_survives_submission_delete(client):
     sub_id = submit(client)
-    service = client.app.state.printer
+    service = client.app.state.services.printer
     job_id = service.submit(sub_id, {"font_size_mm": 10, "handwriting": False})
     frozen = list(service._prepared[job_id].gcode)
     config.CONFIG["machine"]["feed_rate"] = 100
@@ -116,7 +116,7 @@ def test_queue_freezes_program_machine_settings_and_survives_submission_delete(c
 
 def test_cancel_during_simulation_remains_cancelled(client):
     sub_id = submit(client)
-    service = client.app.state.printer
+    service = client.app.state.services.printer
     job_id = service.submit(sub_id)
     worker = threading.Thread(target=service._run_job, args=(job_id,))
     worker.start()
@@ -132,7 +132,7 @@ def test_cancel_during_simulation_remains_cancelled(client):
 
 def test_cancel_queued_job_never_sends(client):
     sub_id = submit(client)
-    service = client.app.state.printer
+    service = client.app.state.services.printer
     job_id = service.submit(sub_id)
     assert client.post(f"/api/admin/cancel/{job_id}", json={}).status_code == 200
     service._run_job(job_id)
@@ -173,7 +173,7 @@ def test_grbl_preview_is_offline_and_rejects_command_injection(client, monkeypat
 
 def test_real_job_waits_for_idle_before_done(client, monkeypatch):
     sub_id = submit(client)
-    service = client.app.state.printer
+    service = client.app.state.services.printer
     service.dry_run = False
     job_id = service.submit(sub_id)
     observed = []
@@ -242,7 +242,7 @@ def test_emergency_uses_open_port_and_interrupts_ack_wait(isolated_runtime):
     link._ser = FakeSerial()
     link._emergency = threading.Event()
     service = printer.PrinterService(dry_run=False)
-    service._link = link
+    service.controller._link = link
     assert service.emergency_stop() is True
     assert link._ser.written == [b"!\x18"]
     with pytest.raises(grbl.CancelledError):
@@ -277,16 +277,16 @@ def test_machine_backup_failure_prevents_parameter_writes(client, monkeypatch):
 
 def test_restart_cancels_unfinished_jobs_without_resuming(client):
     sub_id = submit(client)
-    job_id = client.app.state.printer.submit(sub_id)
+    job_id = client.app.state.services.printer.submit(sub_id)
     jobs.interrupt_unfinished_jobs()
     assert jobs.all_job_records()[0]["status"] == "cancelled"
     assert submissions.get_submission(sub_id)["status"] == "pending"
-    assert client.app.state.printer.get(job_id).sent == 0
+    assert client.app.state.services.printer.get(job_id).sent == 0
 
 
 def test_rewriting_preserves_latest_submission_status(client):
     sub_id = submit(client)
-    service = client.app.state.printer
+    service = client.app.state.services.printer
     first = service.submit(sub_id)
     second = service.submit(sub_id)
     service._simulate = lambda progress: setattr(progress, "sent", progress.total)
@@ -298,10 +298,10 @@ def test_rewriting_preserves_latest_submission_status(client):
 
 def test_job_history_remains_addressable_after_service_restart(client):
     sub_id = submit(client)
-    service = client.app.state.printer
+    service = client.app.state.services.printer
     job_id = service.submit(sub_id)
     service.cancel(job_id)
-    client.app.state.printer = printer.PrinterService(dry_run=True)
+    client.app.state.services.printer = printer.PrinterService(dry_run=True)
     response = client.get(f"/api/admin/job/{job_id}")
     assert response.status_code == 200
     assert response.json()["job"]["status"] == "cancelled"

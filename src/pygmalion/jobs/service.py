@@ -1,15 +1,17 @@
 from __future__ import annotations
+
 import logging
 import queue
 import threading
-from contextlib import contextmanager
 from typing import Any
+
 from ..config import OUTPUT_DIR
 from ..machine import grbl
-from ..submissions import repository as submissions
-from . import repository as jobs
+from ..machine.controller import DeviceController
 from ..storage import now
-from ..writing.prepare import Prepared, prepare, grid_calibration_error
+from ..submissions import repository as submissions
+from ..writing.prepare import Prepared, grid_calibration_error, prepare
+from . import repository as jobs
 from .models import JobProgress
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,9 @@ class PrinterService:
     其余排队等待。
     """
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(
+        self, dry_run: bool = False, controller: DeviceController | None = None
+    ):
         # dry_run=True 时只走排版和 G-code 生成，不真的连机器。
         # 开发和演示用；正式书写要显式关掉。
         self.dry_run = dry_run
@@ -35,62 +39,9 @@ class PrinterService:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._prepared: dict[int, Prepared] = {}
-        self._link: grbl.GrblLink | None = None
-        self.device_lock = threading.RLock()
-        self.manual_control_lock = threading.Lock()
         self.workbench_lock = threading.Lock()
-        self._manual_link: grbl.GrblLink | None = None
-        self._manual_key: tuple[str, int] | None = None
-
-    def close_manual_connection(self) -> None:
-        """在设备锁内释放手动控制连接，供扫描、换端口或书写接管。"""
-        with self.device_lock:
-            link, self._manual_link = self._manual_link, None
-            self._manual_key = None
-            if link is not None:
-                link.__exit__(None, None, None)
-
-    def manual_status(self) -> dict[str, str] | None:
-        """实时控制空闲时查询坐标；书写中不查询，也不隐式打开设备。"""
-        if self.current or not self.device_lock.acquire(blocking=False):
-            return None
-        try:
-            if self._manual_link is None:
-                return None
-            return self._manual_link.status()
-        except Exception:
-            self.close_manual_connection()
-            raise
-        finally:
-            self.device_lock.release()
-
-    @contextmanager
-    def device_connection(self, machine: dict[str, Any], *, reuse: bool = False):
-        """手动微调复用串口；书写独占连接并沿用任务冻结的配置。"""
-        with self.device_lock:
-            if not reuse:
-                self.close_manual_connection()
-                with grbl.GrblLink(machine["port"], machine["baud"]) as link:
-                    yield link
-                return
-            key = (str(machine["port"]), int(machine["baud"]))
-            if self._manual_link is not None and (
-                self._manual_key != key or not self._manual_link.is_open
-            ):
-                self.close_manual_connection()
-            if self._manual_link is None:
-                link = grbl.GrblLink(*key, timeout=0.15)
-                try:
-                    link.__enter__()
-                except Exception:
-                    link.__exit__(None, None, None)
-                    raise
-                self._manual_link, self._manual_key = link, key
-            try:
-                yield self._manual_link
-            except Exception:
-                self.close_manual_connection()
-                raise
+        self.controller = controller or DeviceController()
+        self.controller.busy = lambda: self.current is not None
 
     # -- 生命周期 ---------------------------------------------------------
 
@@ -101,7 +52,11 @@ class PrinterService:
         self._thread = threading.Thread(
             target=self._worker, daemon=True, name="printer-worker"
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except Exception:
+            self._thread = None
+            raise
 
     def stop(self) -> None:
         for job in self.all_jobs():
@@ -114,7 +69,6 @@ class PrinterService:
         self._q.put(-1)  # 唤醒阻塞中的 worker
         if self._thread:
             self._thread.join(timeout=5)
-        self.close_manual_connection()
 
     # -- 提交与查询 -------------------------------------------------------
 
@@ -140,7 +94,9 @@ class PrinterService:
 
         return self.enqueue_prepared(sub, frozen_overrides, prepared)
 
-    def enqueue_prepared(self, sub: dict, frozen_overrides: dict, prepared: Prepared) -> int:
+    def enqueue_prepared(
+        self, sub: dict, frozen_overrides: dict, prepared: Prepared
+    ) -> int:
         """接受已经验证的冻结轨迹；通用正文不会再走诗词排版。"""
         submission_id = sub["id"]
         prepared.submission_id = submission_id
@@ -180,19 +136,18 @@ class PrinterService:
                 jobs.update_job(job_id, "cancelled", finished_at=prog.finished_at)
                 submissions.set_submission_status(prog.submission_id, "pending", job_id)
 
-    def emergency_stop(self) -> bool:
-        """使用正在占用的串口发送实时急停，避免第二次打开独占端口。"""
+    def cancel_active(self) -> None:
+        """中止排队和正在执行的任务；实时设备急停由控制器负责。"""
         for job in self.all_jobs():
             if job.status in ("queued", "printing"):
                 try:
                     self.cancel(job.job_id)
                 except ValueError:
-                    pass  # 任务恰好已完成
-        link = self._link or grbl.active_link()
-        if link and link.is_open:
-            link.emergency_interrupt()
-            return True
-        return False
+                    pass
+
+    def emergency_stop(self) -> bool:
+        self.cancel_active()
+        return self.controller.emergency_interrupt()
 
     @property
     def current(self) -> JobProgress | None:
@@ -271,7 +226,6 @@ class PrinterService:
         except Exception as exc:  # noqa: BLE001
             self._fail(job_id, str(exc))
         finally:
-            self._link = None
             self._current = None
             self._cancel.discard(job_id)
             self._prepared.pop(job_id, None)
@@ -293,37 +247,16 @@ class PrinterService:
         prog.message = "演练模式：未连接机器"
 
     def _send(self, prepared: Prepared, prog: JobProgress) -> None:
-        """真正把 G-code 发给机器。"""
-        from ..machine import grbl
+        def on_progress(sent: int, total: int) -> None:
+            prog.sent, prog.total = sent, total
 
-        m = prepared.machine_snapshot
-
-        with self.device_connection(m) as link:
-            self._link = link
-            # 硬约束：任何写入性操作前必须有一份当天的完整备份。
-            # 用 ensure_backup_today 复用当天已有的备份，而不是每打印一次就新建
-            # 一个文件 —— 否则连写几次就能堆出几十个几乎相同的备份文件。
-            grbl.ensure_backup_today(link, reason=f"书写投稿 #{prepared.submission_id}")
-
-            # 上次异常退出可能把机器留在 Hold（已有过这个 bug）。
-            # 每次开写前自检一次，别让用户面对一台"按了没反应"的机器。
-            link.recover_if_stuck(pen_up_z=m["z_off"])
-
-            def on_progress(sent: int, total: int) -> None:
-                prog.sent, prog.total = sent, total
-
-            link.run_program(
-                prepared.gcode,
-                on_progress=on_progress,
-                cancel_flag=lambda: prog.job_id in self._cancel,
-                # 取消时要抬笔，否则笔停在纸上留墨点
-                pen_up_z=m["z_off"],
-            )
-            # 指令发送完不代表机械运动结束。
-            link.wait_idle(timeout=300)
-            if prog.job_id in self._cancel:
-                raise grbl.CancelledError("任务已中止，缓冲区动作已结束")
-        self._link = None
+        self.controller.send_program(
+            prepared.machine_snapshot,
+            prepared.gcode,
+            submission_id=prepared.submission_id,
+            on_progress=on_progress,
+            cancelled=lambda: prog.job_id in self._cancel,
+        )
 
     def _fail(self, job_id: int, message: str) -> None:
         with self._lock:
