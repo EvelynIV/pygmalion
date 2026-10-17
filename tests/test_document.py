@@ -104,3 +104,12 @@ def test_page_and_preview_guide_never_enter_gcode():
     assert "stroke-dasharray" in a.svg
     assert a.strokes > 0 and a.can_print
     assert all("rect" not in line and "操作前检查" not in line for line in a.gcode)
+
+
+def test_non_dataset_characters_block_writing(client):
+    values = {"body": "甲A1!"}
+    preview = client.post("/api/workbench/preview", json=values).json()
+    assert preview["missing"] == ["A", "1", "!"]
+    assert preview["strokes"] > 0 and not preview["can_print"]
+    assert client.post("/api/workbench/write", json=values).status_code == 400
+    assert submissions.stats()["total"] == 0

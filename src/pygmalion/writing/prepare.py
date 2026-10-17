@@ -164,7 +164,6 @@ class Prepared:
     gcode_path: str = ""
     machine_snapshot: dict[str, Any] = field(default_factory=dict)
     font: str = ""  # 实际选用的字库 id
-    pending_gfont: bool = False  # 快速预览正在后台补齐真迹字形
     blocked: bool = False  # 通用单页入口：缺字或超出纸面时禁止落笔
 
     @property
@@ -184,17 +183,15 @@ class Prepared:
         能否送去写。缺失字符不阻止打印 —— 用户可能明知某个生僻字写不出来
         也愿意先写，界面上给提示即可。真正不能打的是"一个字都画不出来"。
         """
-        return self.strokes > 0 and not self.pending_gfont and not self.blocked
+        return self.strokes > 0 and not self.blocked
 
 
-def _glyph_source(
-    font: str | None = None, gfont_blocking: bool = True
-) -> sources.CompositeSource:
+def _glyph_source(font: str | None = None) -> sources.CompositeSource:
     """
     组装字形来源。font 是选定的中文字库 id，None 用默认（宋体/Arphic）。
     选定字库排在链首，其余字库在后面兜底，生僻字照样写得出来。
     """
-    return sources.source_from_dir(ROOT, font=font, gfont_blocking=gfont_blocking)
+    return sources.source_from_dir(ROOT, font=font)
 
 
 def prepare(
@@ -240,7 +237,7 @@ def prepare(
     lay = layout.fit_font_size(poem, page, lay)
 
     placed = layout.layout_poem(poem, page, lay)
-    source = _glyph_source(cfg["font"], gfont_blocking=not fast_preview)
+    source = _glyph_source(cfg["font"])
     strokes, missing = render_glyphs(placed, source, jit)
     if quality["enabled"]:
         # 平滑在页面坐标中完成；预览与机器落笔因此共用同一条笔画。
@@ -270,7 +267,6 @@ def prepare(
         missing=missing,
         warnings=source.warnings,
         font=actual_font,
-        pending_gfont=source.pending_gfont,
         machine_snapshot=copy.deepcopy(CONFIG["machine"]),
     )
 

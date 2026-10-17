@@ -107,7 +107,7 @@ def prepare_document(
     cfg = build_configs({"font": doc.font, "handwriting": False, "seed": 0})
     page = doc.page_config()
     placed, overflow = layout_document(doc)
-    source = _glyph_source(doc.font or None, gfont_blocking=not fast)
+    source = _glyph_source(doc.font or None)
     strokes, missing = render_glyphs(
         placed, source, replace(cfg["jitter"], enabled=False)
     )
@@ -134,7 +134,6 @@ def prepare_document(
         missing=missing,
         warnings=source.warnings,
         font=doc.font or registry.default_id(ROOT),
-        pending_gfont=source.pending_gfont,
         machine_snapshot=copy.deepcopy(CONFIG["machine"]),
         blocked=overflow or bool(missing),
     )

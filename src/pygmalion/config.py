@@ -83,11 +83,7 @@ DEFAULTS: dict[str, Any] = {
         "port": 8080,
     },
     "fonts": {
-        "dir": "data/fonts",
-        "latin": "hershey",
-        "cjk": None,
-        "gfont_dir": "data/gfonts",
-        "default": "medians",
+        "default": "cjk-medians",
     },
     "stroke_quality": {
         "enabled": True,

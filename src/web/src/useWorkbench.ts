@@ -97,7 +97,6 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
   useEffect(() => {
     if (!document.body.trim()) return;
     const controller = new AbortController();
-    let poll: number | undefined;
     async function load() {
       try {
         const data = await api<Preview & { overflow: boolean }>(
@@ -107,8 +106,6 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
         );
         if (controller.signal.aborted) return;
         setResult({ key: payload, data });
-        if (data.pending_gfont)
-          poll = window.setTimeout(() => void load(), 1200);
       } catch (e) {
         if (!controller.signal.aborted)
           setResult({
@@ -121,7 +118,6 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
     return () => {
       controller.abort();
       window.clearTimeout(debounce);
-      if (poll) window.clearTimeout(poll);
     };
   }, [payload, document.body, revision]);
   useEffect(() => {
@@ -187,7 +183,6 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
     !!preview?.can_print &&
     !preview.overflow &&
     !preview.missing.length &&
-    !preview.pending_gfont &&
     !error &&
     !locked;
   async function write() {

@@ -12,7 +12,6 @@ dependencies = [
     "uvicorn>=0.30.0,<1.0.0",
     "typer>=0.15.1,<1.0.0",
     "pyserial>=3.5,<4.0.0",
-    "Hershey-Fonts>=2.1.0,<3.0.0",
     "websockets (>=15,<17)",
     "datasets (>=5.1,<6)",
 ]
@@ -25,7 +24,6 @@ app = "pygmalion.commands.app:app"
 
 [tool.poetry.dependencies]
 fastapi = {source = "pypi-fallback"}
-Hershey-Fonts = {source = "pypi-fallback"}
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0.0,<9.0.0"

@@ -66,19 +66,15 @@ export function Workbench({
       ? "预览失败：" + m.error
       : !m.preview
         ? "正在生成预览…"
-        : m.preview.pending_gfont
-          ? "最终字形加载中，完成后才能书写"
-          : m.preview.overflow
-            ? "正文超出单页范围，请调整排版"
-            : m.preview.missing.length
-              ? "缺字：" +
-                m.preview.missing.join("、") +
-                "，请更换字库或修改正文"
-              : !m.preview.can_print
-                ? "没有可绘制的正文，无法书写"
-                : busy
-                  ? "当前正文与纸面参数已固定"
-                  : "● 内容位于可书写区域内";
+        : m.preview.overflow
+          ? "正文超出单页范围，请调整排版"
+          : m.preview.missing.length
+            ? "缺字：" + m.preview.missing.join("、") + "，请更换字库或修改正文"
+            : !m.preview.can_print
+              ? "没有可绘制的正文，无法书写"
+              : busy
+                ? "当前正文与纸面参数已固定"
+                : "● 内容位于可书写区域内";
   const invalid =
     !!m.error || !!m.preview?.overflow || !!m.preview?.missing.length;
   return (

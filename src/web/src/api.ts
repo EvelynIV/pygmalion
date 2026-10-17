@@ -49,7 +49,6 @@ export interface Preview {
   strokes: number;
   missing: string[];
   warnings: string[];
-  pending_gfont: boolean;
   font: string;
 }
 export interface Fonts {

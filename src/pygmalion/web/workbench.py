@@ -28,7 +28,6 @@ def preview_document(data: DocumentRequest, fast: bool = True):
             "strokes": p.strokes,
             "missing": p.missing,
             "warnings": p.warnings,
-            "pending_gfont": p.pending_gfont,
             "font": p.font,
         }
     except ValueError as exc:

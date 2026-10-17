@@ -33,7 +33,7 @@ def test_submission_preview_filter_delete_without_auth(client):
         f"/api/admin/preview/{sub_id}?font_size_mm=12&direction=vertical"
     ).json()
     assert preview["can_print"] and "<svg" in preview["svg"] and preview["cells"] > 0
-    assert preview["pending_gfont"] is False
+    assert "pending_gfont" not in preview
     assert not preview["missing"]
     assert (
         client.get(f"/api/admin/submission/{sub_id}").json()["item"]["title"]

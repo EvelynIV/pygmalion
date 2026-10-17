@@ -36,3 +36,28 @@ def client(isolated_runtime):
         # API queue tests control the worker explicitly; no physical serial port opens.
         app.state.printer.stop()
         yield session
+
+
+@pytest.fixture(autouse=True)
+def font_dataset_runtime(tmp_path, monkeypatch):
+    """测试用最小笔画数据集，不依赖未跟踪的真实字库。"""
+    from datasets import Dataset
+    from pygmalion.writing import document
+    from pygmalion.web import api
+
+    monkeypatch.delenv("PYGMALION_FONTS_DIR", raising=False)
+    root = tmp_path / "font-runtime"
+    directory = root / "model-bin" / "cjk-medians"
+    directory.mkdir(parents=True)
+    chars = (
+        "甲乙丙空山新雨后，天气晚来秋。山居秋暝陈雨诗一二三年月日书于赠天地玄黄宇宙洪荒"
+    )
+    Dataset.from_list(
+        [
+            {"char": ch, "lengths": [2], "x": [-4000, 4000], "y": [-2000, 2000]}
+            for ch in dict.fromkeys(chars)
+        ]
+    ).to_parquet(directory / "train.parquet")
+    monkeypatch.setattr(preparation, "ROOT", root)
+    monkeypatch.setattr(document, "ROOT", root)
+    monkeypatch.setattr(api, "ROOT", root)
