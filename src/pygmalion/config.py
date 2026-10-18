@@ -35,6 +35,7 @@ DEFAULTS: dict[str, Any] = {
         "feed_rate": 3000,
         "jog_speed": 3000,
         "stroke_delay": 0.0,
+        "table_segment_mm": 5.0,
     },
     "page": {
         "width_mm": 210.0,
@@ -83,11 +84,7 @@ DEFAULTS: dict[str, Any] = {
         "port": 8080,
     },
     "fonts": {
-        "dir": "data/fonts",
-        "latin": "hershey",
-        "cjk": None,
-        "gfont_dir": "data/gfonts",
-        "default": "medians",
+        "default": "cjk-medians-plus",
     },
     "stroke_quality": {
         "enabled": True,

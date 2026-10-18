@@ -1,48 +1,22 @@
 """通用单页正文排版；文档名称不参与轨迹，保留换行与缩进。"""
 
 from dataclasses import replace
-from typing import Literal
-
-from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..config import CONFIG, ROOT
 from ..fonts import registry
 from ..machine import gcode
+from ..schemas.document import DocumentRequest
 from .layout import char_width_units
-from .models import PageConfig, PlacedGlyph, Poem
+from .models import PlacedGlyph, Poem
+from .page import page_config
 from .prepare import Prepared, _glyph_source, build_configs
 from .preview import strokes_to_svg
 from .render import render_glyphs
 from .smooth import smooth_strokes
 
 
-class DocumentRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    name: str = Field(default="未命名文档", max_length=120)
-    body: str = Field(default="", max_length=20000)
-    font: str = Field(default="", max_length=120)
-    direction: Literal["horizontal", "vertical"] = "horizontal"
-    paper: Literal["A4", "A5"] = "A4"
-    font_size_mm: float = Field(default=8, ge=4, le=40)
-    char_gap_mm: float = Field(default=0, ge=0, le=20)
-    line_gap_mm: float = Field(default=3, ge=0, le=30)
-    margin_mm: float = Field(default=20, ge=0, le=60)
-    align: Literal["left", "center", "right"] = "left"
-
-    @model_validator(mode="after")
-    def valid_page(self):
-        width, height = (210, 297) if self.paper == "A4" else (148, 210)
-        if 2 * self.margin_mm + self.font_size_mm > min(width, height):
-            raise ValueError("页边距过大，纸面没有足够的书写空间")
-        return self
-
-    def page_config(self) -> PageConfig:
-        width, height = (210, 297) if self.paper == "A4" else (148, 210)
-        return PageConfig(width, height, *([self.margin_mm] * 4))
-
-
 def layout_document(doc: DocumentRequest) -> tuple[list[PlacedGlyph], bool]:
-    page = doc.page_config()
+    page = page_config(doc)
     vertical = doc.direction == "vertical"
     limit = page.usable_h if vertical else page.usable_w
     rows: list[list[tuple[str, float]]] = []
@@ -105,9 +79,9 @@ def prepare_document(
     ):
         raise ValueError("所选字库不可用，请重新选择")
     cfg = build_configs({"font": doc.font, "handwriting": False, "seed": 0})
-    page = doc.page_config()
+    page = page_config(doc)
     placed, overflow = layout_document(doc)
-    source = _glyph_source(doc.font or None, gfont_blocking=not fast)
+    source = _glyph_source(doc.font or None)
     strokes, missing = render_glyphs(
         placed, source, replace(cfg["jitter"], enabled=False)
     )
@@ -134,7 +108,6 @@ def prepare_document(
         missing=missing,
         warnings=source.warnings,
         font=doc.font or registry.default_id(ROOT),
-        pending_gfont=source.pending_gfont,
         machine_snapshot=copy.deepcopy(CONFIG["machine"]),
         blocked=overflow or bool(missing),
     )

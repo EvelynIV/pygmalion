@@ -49,8 +49,16 @@ export interface Preview {
   strokes: number;
   missing: string[];
   warnings: string[];
-  pending_gfont: boolean;
   font: string;
+  diagnostics?: import("./canvas").Diagnostic[];
+  layout?: {
+    element_id: string;
+    regions: {
+      row?: number;
+      col?: number;
+      lines: { text: string; x_mm: number; y_mm: number }[];
+    }[];
+  }[];
 }
 export interface Fonts {
   default: string;

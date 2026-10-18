@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import JSONResponse
 
-from .api import api_backup, api_jog, api_machine, api_recover
+from ...servicer import machine
+from ...servicer.errors import ServiceError
+from ..dependencies import get_context
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -19,8 +19,9 @@ router = APIRouter()
 @router.websocket("/api/admin/machine/ws")
 async def machine_socket(socket: WebSocket):
     await socket.accept()
-    service = socket.app.state.printer
-    if not service.manual_control_lock.acquire(blocking=False):
+    context = get_context(socket)
+    session = machine.begin_session(context)
+    if session is None:
         await socket.send_json({"type": "error", "error": "另一个页面正在控制机器"})
         await socket.close(code=1008)
         return
@@ -39,9 +40,8 @@ async def machine_socket(socket: WebSocket):
         nonlocal released
         if not released:
             try:
-                await run_in_threadpool(service.close_manual_connection)
+                await run_in_threadpool(machine.end_session, context, session)
             finally:
-                service.manual_control_lock.release()
                 released = True
 
     async def cancel_pending(reason):
@@ -67,11 +67,11 @@ async def machine_socket(socket: WebSocket):
                 command = await asyncio.wait_for(commands.get(), timeout=0.2)
             except TimeoutError:
                 try:
-                    state = await run_in_threadpool(service.manual_status)
+                    state = await run_in_threadpool(machine.manual_status, context)
                     if state is not None and state != previous:
                         previous = state
                         await send({"type": "state", "state": state})
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — 将操作失败转换成既有错误响应
                     await send({"type": "error", "error": str(exc)})
                 continue
             kind = command["type"]
@@ -82,19 +82,27 @@ async def machine_socket(socket: WebSocket):
                 return
             try:
                 if kind == "inspect":
-                    result = await run_in_threadpool(api_machine, socket)
+                    result = await run_in_threadpool(
+                        machine.inspect, context, session=session
+                    )
                 elif kind == "jog":
                     payload = command.get("payload", {})
                     if not isinstance(payload, dict):
                         result = {"ok": False, "error": "点动参数必须是对象"}
                     else:
-                        result = await run_in_threadpool(api_jog, socket, payload)
+                        result = await run_in_threadpool(
+                            machine.jog, context, payload, session=session
+                        )
                 elif kind == "backup":
-                    result = await run_in_threadpool(api_backup, socket)
+                    result = await run_in_threadpool(
+                        machine.backup, context, session=session
+                    )
                 else:
-                    result = await run_in_threadpool(api_recover, socket, {})
-                if isinstance(result, JSONResponse):
-                    result = json.loads(result.body)
+                    result = await run_in_threadpool(
+                        machine.recover, context, {}, session=session
+                    )
+            except ServiceError as exc:
+                result = exc.payload
             except Exception as exc:
                 logger.exception("实时控制指令失败")
                 result = {"ok": False, "error": str(exc)}

@@ -1,64 +1,25 @@
-import { useEffect, useRef, useState } from "react";
-import { api, type Job, type Preview } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type Job } from "./api";
+import { usePaperPreview } from "./usePaperPreview";
 
-export interface WritingDocument {
-  name: string;
-  body: string;
-  font: string;
-  paper: "A4" | "A5";
-  direction: "horizontal" | "vertical";
-  align: "left" | "center" | "right";
-  font_size_mm: number;
-  char_gap_mm: number;
-  line_gap_mm: number;
-  margin_mm: number;
-}
-const blank: WritingDocument = {
-  name: "未命名文档",
-  body: "",
-  font: "",
-  paper: "A4",
-  direction: "horizontal",
-  align: "left",
-  font_size_mm: 8,
-  char_gap_mm: 0,
-  line_gap_mm: 3,
-  margin_mm: 20,
-};
-const storageKey = "pygmalion-document-v1";
-function readDocument(raw: unknown): WritingDocument {
-  if (!raw || typeof raw !== "object") throw new Error("文档格式不正确");
-  const d = raw as WritingDocument;
-  if (
-    typeof d.name !== "string" ||
-    d.name.length > 120 ||
-    typeof d.body !== "string" ||
-    d.body.length > 20000 ||
-    typeof d.font !== "string" ||
-    d.font.length > 120 ||
-    !["A4", "A5"].includes(d.paper) ||
-    !["horizontal", "vertical"].includes(d.direction) ||
-    !["left", "center", "right"].includes(d.align)
-  )
-    throw new Error("文档内容或排版字段不正确");
-  for (const [key, min, max] of [
-    ["font_size_mm", 4, 40],
-    ["char_gap_mm", 0, 20],
-    ["line_gap_mm", 0, 30],
-    ["margin_mm", 0, 60],
-  ] as const)
-    if (!Number.isFinite(d[key]) || d[key] < min || d[key] > max)
-      throw new Error("文档中的排版数值无效");
-  return Object.fromEntries(
-    Object.keys(blank).map((key) => [key, d[key as keyof WritingDocument]]),
-  ) as unknown as WritingDocument;
-}
+import {
+  blank,
+  readDocument,
+  type WritingDocument,
+  type PaperElement,
+  type Table,
+  type Diagnostic,
+} from "./canvas";
+export type { WritingDocument } from "./canvas";
+const storageKey = "pygmalion-document-v2";
 function initialDocument() {
   try {
-    const saved = localStorage.getItem(storageKey);
-    return saved ? readDocument(JSON.parse(saved)) : { ...blank };
+    const saved =
+      localStorage.getItem(storageKey) ||
+      localStorage.getItem("pygmalion-document-v1");
+    return saved ? readDocument(JSON.parse(saved)) : structuredClone(blank);
   } catch {
-    return { ...blank };
+    return structuredClone(blank);
   }
 }
 type Props = {
@@ -69,97 +30,288 @@ type Props = {
 };
 export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
   const [document, setDocument] = useState(initialDocument);
-  const [saved, setSaved] = useState(() => {
-    try {
-      return localStorage.getItem(storageKey) || "";
-    } catch {
-      return "";
-    }
+  // 文件导出检查点与浏览器草稿分别追踪；自动保存不代表已经导出文件。
+  const [saved, setSaved] = useState("");
+  const [cached, setCached] = useState("");
+  const [saveError, setSaveError] = useState<string>();
+  const [inputEpoch, setInputEpoch] = useState(0);
+  const [inputErrors, setInputErrors] = useState<Record<string, string>>({});
+  const inputErrorsRef = useRef<Record<string, string>>({});
+  const reportInput = useCallback((id: string, error?: string) => {
+    if (inputErrorsRef.current[id] === error) return;
+    const next = { ...inputErrorsRef.current };
+    if (error) next[id] = error;
+    else delete next[id];
+    inputErrorsRef.current = next;
+    setInputErrors(next);
+  }, []);
+  function resetInputs(restoreFocus = false) {
+    const active = window.document.activeElement;
+    const label =
+      restoreFocus && active?.matches("input[data-number-field]")
+        ? active.getAttribute("aria-label")
+        : undefined;
+    inputErrorsRef.current = {};
+    setInputErrors({});
+    setInputEpoch((v) => v + 1);
+    if (label)
+      requestAnimationFrame(() => {
+        window.document
+          .querySelector<HTMLInputElement>(
+            `input[data-number-field][aria-label="${CSS.escape(label)}"]`,
+          )
+          ?.focus();
+      });
+  }
+  function invalidInput() {
+    const message = Object.values(inputErrorsRef.current)[0];
+    if (message) notify(message, true);
+    return !!message;
+  }
+  const latest = useRef(document);
+  const cachedRef = useRef("");
+  const history = useRef<{
+    past: WritingDocument[];
+    future: WritingDocument[];
+    editing?: { key: string; baseline: WritingDocument };
+  }>({ past: [], future: [] });
+  const [historyState, setHistoryState] = useState({
+    canUndo: false,
+    canRedo: false,
   });
+  function refreshHistory() {
+    const state = history.current;
+    setHistoryState({
+      canUndo:
+        !!state.past.length ||
+        !!(
+          state.editing &&
+          JSON.stringify(state.editing.baseline) !==
+            JSON.stringify(latest.current)
+        ),
+      canRedo: !!state.future.length,
+    });
+  }
+  const [composing, setComposing] = useState(false);
+  const persist = useCallback((next: WritingDocument) => {
+    try {
+      // 不能用无法重新打开的文档覆盖上一份可恢复草稿。
+      readDocument(next);
+      const snapshot = JSON.stringify(next);
+      localStorage.setItem(storageKey, snapshot);
+      cachedRef.current = snapshot;
+      setCached(snapshot);
+      setSaveError(undefined);
+      return true;
+    } catch (error) {
+      setSaveError(
+        "自动保存失败：" +
+          (error instanceof Error ? error.message : "浏览器存储不可用"),
+      );
+      return false;
+    }
+  }, []);
+  const migrationNotified = useRef(false);
+  useEffect(() => {
+    if (migrationNotified.current) return;
+    migrationNotified.current = true;
+    try {
+      if (!localStorage.getItem(storageKey)) {
+        const old = localStorage.getItem("pygmalion-document-v1");
+        if (old && JSON.parse(old).direction === "vertical")
+          notify("旧竖排文档已转换为横排，请检查纸面后保存");
+      }
+    } catch {
+      /* 无效旧文档由加载器恢复为空白文档。 */
+    }
+  }, [notify]);
+  useEffect(() => {
+    persist(latest.current);
+  }, [persist]);
   const [revision, setRevision] = useState(0);
-  const [result, setResult] = useState<{
-    key: string;
-    data?: Preview & { overflow: boolean };
-    error?: string;
-  }>();
+  const [generation, setGeneration] = useState(0);
   const [writing, setWriting] = useState(false);
   const [jobId, setJobId] = useState<number>();
   const posting = useRef(false);
   const payload = JSON.stringify(document);
   const dirty = payload !== saved;
   const locked = busy || writing;
-  const preview = result?.key === payload ? result.data : undefined;
-  const error = result?.key === payload ? result.error : undefined;
+  const { preview, error, previewUrl } = usePaperPreview(
+    document,
+    generation,
+    revision,
+  );
   useEffect(() => {
     if (writing && jobId && jobs?.some((job) => job.job_id === jobId))
       queueMicrotask(() => setWriting(false));
   }, [jobs, jobId, writing]);
   useEffect(() => {
-    if (!document.body.trim()) return;
-    const controller = new AbortController();
-    let poll: number | undefined;
-    async function load() {
-      try {
-        const data = await api<Preview & { overflow: boolean }>(
-          "/api/workbench/preview",
-          readDocument(JSON.parse(payload)),
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        setResult({ key: payload, data });
-        if (data.pending_gfont)
-          poll = window.setTimeout(() => void load(), 1200);
-      } catch (e) {
-        if (!controller.signal.aborted)
-          setResult({
-            key: payload,
-            error: e instanceof Error ? e.message : "预览失败",
-          });
-      }
-    }
-    const debounce = window.setTimeout(() => void load(), 300);
-    return () => {
-      controller.abort();
-      window.clearTimeout(debounce);
-      if (poll) window.clearTimeout(poll);
-    };
-  }, [payload, document.body, revision]);
-  useEffect(() => {
-    if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
+      if (JSON.stringify(latest.current) !== cachedRef.current)
+        event.preventDefault();
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  }, []);
+  const lockedRef = useRef(locked);
+  useEffect(() => {
+    lockedRef.current = locked;
+  }, [locked]);
+  const [fitting, setFitting] = useState(false);
+  function endEdit(key?: string) {
+    const group = history.current.editing;
+    if (!group || (key !== undefined && group.key !== key)) return;
+    history.current.editing = undefined;
+    if (JSON.stringify(group.baseline) !== JSON.stringify(latest.current)) {
+      history.current.past = [
+        ...history.current.past.slice(-49),
+        group.baseline,
+      ];
+    }
+    refreshHistory();
+  }
+  function beginEdit(key: string) {
+    if (locked || lockedRef.current || history.current.editing?.key === key)
+      return;
+    endEdit();
+    history.current.editing = { key, baseline: latest.current };
+    refreshHistory();
+  }
+  function apply(next: WritingDocument) {
+    // 不在 React updater/effect 中写存储：输入事件返回前就持久化最新正文。
+    latest.current = next;
+    persist(next);
+    setDocument(next);
+    refreshHistory();
+  }
+  function commit(next: WritingDocument) {
+    if (locked || lockedRef.current) return;
+    if (JSON.stringify(next) === JSON.stringify(latest.current)) {
+      if (JSON.stringify(next) !== cachedRef.current) persist(next);
+      return;
+    }
+    if (!history.current.editing)
+      history.current.past = [
+        ...history.current.past.slice(-49),
+        latest.current,
+      ];
+    history.current.future = [];
+    apply(next);
+  }
+  function replaceElement(element: PaperElement) {
+    commit({
+      ...latest.current,
+      elements: latest.current.elements.map((e) =>
+        e.id === element.id ? element : e,
+      ),
+    });
+  }
+  function replaceText(id: string, text: string, row?: number, col?: number) {
+    const element = latest.current.elements.find((item) => item.id === id);
+    if (!element) return;
+    replaceElement(
+      element.type === "text"
+        ? { ...element, text }
+        : {
+            ...element,
+            cells: element.cells.map((cell) =>
+              cell.row === row && cell.col === col ? { ...cell, text } : cell,
+            ),
+          },
+    );
+  }
+  function travel(direction: "undo" | "redo") {
+    if (locked || lockedRef.current) return;
+    resetInputs(true);
+    const key = history.current.editing?.key;
+    endEdit();
+    const state = history.current;
+    const next = direction === "undo" ? state.past.pop() : state.future.shift();
+    if (next) {
+      if (direction === "undo") state.future.unshift(latest.current);
+      else state.past = [...state.past.slice(-49), latest.current];
+      apply(next);
+    }
+    // 保持输入焦点；后续输入从恢复后的正文开始新的一次编辑。
+    if (key !== undefined) state.editing = { key, baseline: latest.current };
+    refreshHistory();
+  }
+  function undo() {
+    travel("undo");
+  }
+  function redo() {
+    travel("redo");
+  }
+  async function fit(id: string) {
+    if (locked || fitting || invalidInput()) return;
+    const snapshot = JSON.stringify(document);
+    setFitting(true);
+    try {
+      const result = await api<{
+        table: Table;
+        diagnostics: Diagnostic[];
+        success: boolean;
+      }>("/api/workbench/table-fit", { document, element_id: id });
+      if (
+        lockedRef.current ||
+        Object.keys(inputErrorsRef.current).length ||
+        JSON.stringify(latest.current) !== snapshot
+      ) {
+        notify("文档已变化，请重新自适应", true);
+        return;
+      }
+      if (!result.success) {
+        notify(result.diagnostics.map((d) => d.message).join("；"), true);
+        return;
+      }
+      replaceElement(result.table);
+      notify("表格已自适应，外框尺寸保持不变");
+    } catch (e) {
+      notify(e instanceof Error ? e.message : "自适应失败", true);
+    } finally {
+      setFitting(false);
+    }
+  }
   function change<K extends keyof WritingDocument>(
     key: K,
     value: WritingDocument[K],
   ) {
-    if (!locked) setDocument((old) => ({ ...old, [key]: value }));
+    if (!locked) commit({ ...latest.current, [key]: value });
   }
   function newDocument() {
     if (!locked) {
-      setDocument({ ...blank });
+      resetInputs();
+      endEdit();
+      setGeneration((value) => value + 1);
+      commit(structuredClone(blank));
       setSaved("");
     }
   }
   function save() {
+    if (invalidInput()) return;
     try {
-      readDocument(document);
-      localStorage.setItem(storageKey, payload);
+      endEdit();
+      const current = latest.current;
+      const payload = JSON.stringify(current);
+      readDocument(current);
+      const cached = persist(current);
       const url = URL.createObjectURL(
         new Blob([payload], { type: "application/json" }),
       );
       const link = window.document.createElement("a");
       link.href = url;
       link.download =
-        (document.name.replace(/[\\/:*?"<>|]/g, "_") || "未命名文档") +
+        (current.name.replace(/[\\/:*?"<>|]/g, "_") || "未命名文档") +
         ".pygmalion.json";
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       setSaved(payload);
-      notify("文档已保存到本机浏览器，并导出文件");
+      notify(
+        cached
+          ? "文档已自动保存到本机，并导出文件"
+          : "文件已导出；本机自动保存失败，请重试",
+        !cached,
+      );
     } catch (e) {
       notify(e instanceof Error ? e.message : "保存失败，请重试", true);
     }
@@ -170,28 +322,44 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
       const text = await input.text();
       const next = input.name.toLowerCase().endsWith(".txt")
         ? readDocument({
-            ...blank,
             name: input.name.replace(/\.txt$/i, ""),
+            paper: "A4",
+            margin_mm: 20,
             body: text,
           })
         : readDocument(JSON.parse(text));
-      setDocument(next);
+      if (lockedRef.current) {
+        notify("书写中无法打开文档", true);
+        return;
+      }
+      endEdit();
+      setGeneration((value) => value + 1);
+      resetInputs();
+      commit(next);
       setSaved(JSON.stringify(next));
-      notify("文档已打开");
+      notify(
+        "文档已打开" +
+          (!input.name.toLowerCase().endsWith(".txt") &&
+          JSON.parse(text).direction === "vertical"
+            ? "；旧竖排内容已转换为横排"
+            : ""),
+      );
     } catch (e) {
       notify(e instanceof Error ? e.message : "无法打开文档", true);
     }
   }
   const canWrite =
-    !!document.body.trim() &&
+    !!document.elements.length &&
     !!preview?.can_print &&
     !preview.overflow &&
     !preview.missing.length &&
-    !preview.pending_gfont &&
     !error &&
-    !locked;
+    !locked &&
+    !fitting &&
+    !Object.keys(inputErrors).length &&
+    !composing;
   async function write() {
-    if (!canWrite || posting.current) return;
+    if (!canWrite || posting.current || invalidInput()) return;
     posting.current = true;
     setWriting(true);
     try {
@@ -203,8 +371,8 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
       refresh();
       notify(
         result.dry_run
-          ? "演练任务已开始，正文与参数已冻结"
-          : "书写任务已开始，正文与参数已冻结",
+          ? "演练任务已开始，纸面与参数已冻结"
+          : "书写任务已开始，纸面与参数已冻结",
       );
     } catch (e) {
       setWriting(false);
@@ -216,9 +384,30 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
   return {
     document,
     change,
+    commit,
+    replaceElement,
+    undo,
+    redo,
+    canUndo: historyState.canUndo,
+    canRedo: historyState.canRedo,
+    beginEdit,
+    endEdit,
+    replaceText,
+    composing,
+    setComposing,
+    saveError,
+    inputEpoch,
+    inputErrors,
+    reportInput,
+    locallySaved: cached === payload && !saveError,
+    retrySave: () => persist(latest.current),
+    fit,
+    fitting,
+    notify,
     locked,
     dirty,
     preview,
+    previewUrl,
     error,
     canWrite,
     writing,
@@ -228,7 +417,6 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
     open,
     write,
     reload: () => {
-      setResult(undefined);
       setRevision((v) => v + 1);
     },
   };

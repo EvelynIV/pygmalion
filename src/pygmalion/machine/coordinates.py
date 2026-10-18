@@ -23,6 +23,7 @@ class MachineConfig:
     # 用途：笔画密的地方连续快速落笔，墨水来不及润开、纸面来不及吃墨，
     # 会出现起笔断线或墨团。停一下让墨水跟上。代价是整体变慢。
     stroke_delay: float = 0.0
+    table_segment_mm: float = 5.0  # 表格框线每次连续落笔的最大长度
 
     # ---- 坐标转换（务必标定后再用）----
     swap_xy: bool = True  # 对应 revxy=true
