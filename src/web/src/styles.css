@@ -7,8 +7,11 @@
   font-weight: 400;
   line-height: 20px;
   color-scheme: light;
-  --background: #fafaf8;
-  --sidebar: var(--background);
+  --background: #f8f7f2;
+  --sidebar: #f3f1ea;
+  --surface-subtle: #eeece5;
+  --border-strong: #c7cdc8;
+  --editor-interaction: #607d99;
   --header: var(--background);
   --text: #252a2a;
   --secondary: #656c69;
@@ -27,14 +30,18 @@
   --paper-bg: #f8f7f2;
   --paper-ink: #252a2a;
   --paper-line: #d8dcd7;
-  --sidebar-width: 44px;
+  --sidebar-width: 52px;
   --content-width: 1140px;
   --control-height: 32px;
-  --radius: 8px;
+  --radius: 4px;
 }
 :root[data-theme="abyssus"] {
   color-scheme: dark;
   --background: #080a0d;
+  --sidebar: #0b0f13;
+  --surface-subtle: #151f28;
+  --border-strong: #344b60;
+  --editor-interaction: #9fc4e2;
   --text: #e7eef4;
   --secondary: #aab7c3;
   --muted: #aab7c3;

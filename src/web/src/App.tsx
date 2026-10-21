@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { api, useResource, type Job, type Jobs, type Ports } from "./api";
-import { Button, Dialog, Link } from "./ui";
+import { Button, Dialog, Link, WorkspaceIcon } from "./ui";
 import { navigation } from "./navigation";
 import { MachinePage, SettingsPage } from "./machine";
 import { Workbench } from "./workbench";
 import { useWorkbench } from "./useWorkbench";
 
 export default function App() {
+  const [documentHost, setDocumentHost] = useState<HTMLDivElement | null>(null);
+  const [help, setHelp] = useState(false);
+  const [deviceState, setDeviceState] = useState("设备状态未读取");
   const [path, setPath] = useState(window.location.pathname);
   const [night, setNight] = useState(() =>
     ["night", "abyssus"].includes(
@@ -88,20 +91,7 @@ export default function App() {
             aria-expanded={expanded}
             onClick={() => setExpanded(!expanded)}
           >
-            <img
-              className="light-asset"
-              src="/design/v1/menu.svg"
-              width="20"
-              height="20"
-              alt=""
-            />
-            <img
-              className="night-asset"
-              src="/design/v1/menu-night.svg"
-              width="20"
-              height="20"
-              alt=""
-            />
+            <WorkspaceIcon name="menu" size={18} />
           </Button>
           <div className="brand">
             <span>{expanded ? "Pygmalion" : "P"}</span>
@@ -115,22 +105,9 @@ export default function App() {
                 className={`nav-item ${active === item.key ? "selected" : ""}`}
                 aria-current={active === item.key ? "page" : undefined}
               >
-                <span className="design-icon" aria-hidden="true">
-                  <img
-                    className="light-asset"
-                    src={`/design/v1/${item.key}.svg`}
-                    width="16"
-                    height="16"
-                    alt=""
-                  />
-                  <img
-                    className="night-asset"
-                    src={`/design/v1/${item.key}-night.svg`}
-                    width="16"
-                    height="16"
-                    alt=""
-                  />
-                </span>
+                <WorkspaceIcon
+                  name={`${item.key}${active === item.key ? "-selected" : ""}`}
+                />
                 <span className={expanded ? "" : "sr-only"}>{item.label}</span>
                 {!expanded && (
                   <span className="nav-tooltip" aria-hidden="true">
@@ -140,25 +117,44 @@ export default function App() {
               </Link>
             ))}
           </nav>
+          <Button
+            className="sidebar-help"
+            kind="ghost"
+            aria-label="快捷键与帮助"
+            onClick={() => setHelp(true)}
+          >
+            <WorkspaceIcon name="help" />
+          </Button>
         </aside>
         <div className="workspace">
           <header className="header">
             <div className="header-inner">
-              <div className="breadcrumb">Pygmalion / {pageLabel}</div>
+              <div className="breadcrumb">
+                <span>Pygmalion</span>
+                <strong>/ {pageLabel}</strong>
+              </div>
+              {active === "layout" && (
+                <div className="document-host" ref={setDocumentHost} />
+              )}
               <div className="header-actions">
+                <Link
+                  href="/admin/machine"
+                  className="header-device"
+                  title={`串口：${ports.data?.configured_port || "尚未读取"}`}
+                >
+                  ○{" "}
+                  {jobs.error
+                    ? "任务状态不可用"
+                    : busy
+                      ? "书写中"
+                      : deviceState}
+                </Link>
                 <Button
                   kind="ghost"
                   onClick={() => setNight(!night)}
                   aria-label={`切换为${night ? "白昼" : "夜间"}主题`}
                 >
-                  {night ? "夜间" : "白昼"}
-                </Button>
-                <Button
-                  kind="danger"
-                  onClick={() => void estop()}
-                  disabled={estopping}
-                >
-                  {estopping ? "急停中" : "急停"}
+                  主题
                 </Button>
                 {active === "layout" && (
                   <Button
@@ -172,6 +168,14 @@ export default function App() {
                     {doc.writing ? "正在准备" : busy ? "书写中" : "开始书写"}
                   </Button>
                 )}
+                {active !== "layout" && <span className="start-reserved" />}
+                <Button
+                  kind="danger"
+                  onClick={() => void estop()}
+                  disabled={estopping}
+                >
+                  {estopping ? "急停中" : "急停"}
+                </Button>
               </div>
             </div>
           </header>
@@ -180,22 +184,15 @@ export default function App() {
             className={`main ${active === "layout" ? "workbench-main" : "utility-main"}`}
           >
             {active === "layout" ? (
-              <Workbench
-                model={doc}
-                deviceText={
-                  jobs.error
-                    ? "任务状态不可用"
-                    : busy
-                      ? "书写中"
-                      : "设备状态未读取"
-                }
-                port={ports.data?.configured_port || "—"}
-                busy={busy}
-              />
+              <Workbench model={doc} documentHost={documentHost} busy={busy} />
             ) : (
               <div className="bounded">
                 {active === "machine" ? (
-                  <MachinePage busy={busy} notify={notify} />
+                  <MachinePage
+                    busy={busy}
+                    notify={notify}
+                    onState={setDeviceState}
+                  />
                 ) : (
                   <SettingsPage busy={busy} notify={notify} />
                 )}
@@ -235,6 +232,28 @@ export default function App() {
           </footer>
         </div>
       </div>
+      {help && (
+        <Dialog
+          title="快捷键与帮助"
+          confirmLabel="知道了"
+          close={() => setHelp(false)}
+          confirm={async () => {}}
+        >
+          <p>
+            单击文本框或单元格输入，输入即保存到本机。Ctrl+Z 撤销，Ctrl+Y
+            重做。非文字输入时 Ctrl / ⌘ + A 全选纸面元素，Backspace / Delete
+            删除，Esc 取消选择。
+          </p>
+          <p>
+            H 切换小手拖动，Esc 返回选择；Ctrl / ⌘ + 滚轮仅缩放纸张。Shift
+            点击可扩展单元格选区。
+          </p>
+          <p>
+            纸张左上角为 0, 0
+            mm。虚线和选择框不落笔；勾选“实际书写表格线”后才书写表格框线，默认开启。
+          </p>
+        </Dialog>
+      )}
       {cancel && (
         <Dialog
           title="中止书写任务"

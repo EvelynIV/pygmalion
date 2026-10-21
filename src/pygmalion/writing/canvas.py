@@ -6,12 +6,14 @@ import copy
 import math
 
 from ..config import CONFIG, ROOT
+from ..drawing.svg import vector_strokes
 from ..fonts import registry
 from ..machine import gcode
 from ..schemas.canvas import (
     CanvasDocument,
     Table,
     TextBox,
+    Vector,
 )
 from .layout import char_width_units
 from .models import PlacedGlyph, Poem, Stroke
@@ -162,11 +164,6 @@ def prepare_canvas(doc: CanvasDocument) -> tuple[Prepared, bool]:
     strokes, missing, diagnostics, layouts = [], [], [], []
     glyph_count = 0
     for element in doc.elements:
-        if element.font and not any(
-            f.id == element.font for f in registry.discover(ROOT)
-        ):
-            raise ValueError("所选字库不可用，请重新选择")
-        source = _glyph_source(element.font or None)
         invalid = (
             element.x_mm < doc.margin_mm - 1e-6
             or element.y_mm < doc.margin_mm - 1e-6
@@ -181,6 +178,31 @@ def prepare_canvas(doc: CanvasDocument) -> tuple[Prepared, bool]:
                     "message": "元素超出纸面可写范围",
                 }
             )
+        if isinstance(element, Vector):
+            paths = vector_strokes(element)
+            if any(
+                x < doc.margin_mm - 1e-5
+                or y < doc.margin_mm - 1e-5
+                or x > page.width_mm - doc.margin_mm + 1e-5
+                or y > page.height_mm - doc.margin_mm + 1e-5
+                for stroke in paths
+                for x, y in stroke.points
+            ):
+                diagnostics.append(
+                    {
+                        "element_id": element.id,
+                        "code": "bounds",
+                        "message": "矢量路径超出纸面可写范围",
+                    }
+                )
+            strokes.extend(paths)
+            layouts.append({"element_id": element.id, "regions": []})
+            continue
+        if element.font and not any(
+            f.id == element.font for f in registry.discover(ROOT)
+        ):
+            raise ValueError("所选字库不可用，请重新选择")
+        source = _glyph_source(element.font or None)
         regions = (
             [(None, element.x_mm, element.y_mm, element.width_mm, element.height_mm)]
             if isinstance(element, TextBox)

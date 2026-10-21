@@ -7,7 +7,14 @@ import {
   type Machine,
   type Ports,
 } from "./api";
-import { Button, Dialog, Heading, Notice, ResourceState } from "./ui";
+import {
+  Button,
+  Dialog,
+  Heading,
+  Notice,
+  ResourceState,
+  WorkspaceIcon,
+} from "./ui";
 import { ControlError, MachineControl } from "./control";
 
 type Notify = (text: string, error?: boolean) => void;
@@ -15,9 +22,11 @@ type Notify = (text: string, error?: boolean) => void;
 export function MachinePage({
   busy,
   notify,
+  onState,
 }: {
   busy: boolean;
   notify: Notify;
+  onState?: (state: string) => void;
 }) {
   const ports = useResource<Ports>("/api/admin/serial-ports");
   const [port, setPort] = useState("");
@@ -27,7 +36,6 @@ export function MachinePage({
   const [step, setStep] = useState(5);
   const [working, setWorking] = useState(false);
   const [zero, setZero] = useState(false);
-  const [connectionExpanded, setConnectionExpanded] = useState(true);
   const [jogCount, setJogCount] = useState(0);
   const pendingJogs = useRef(0);
   const operating = useRef(false);
@@ -57,8 +65,14 @@ export function MachinePage({
     return () => {
       mounted.current = false;
       control.close(false);
+      onState?.("设备状态未读取");
     };
-  }, [control]);
+  }, [control, onState]);
+  useEffect(() => {
+    onState?.(
+      machineError ? "设备不可用" : machine?.state.state || "设备状态未读取",
+    );
+  }, [onState, machineError, machine]);
   const connected = !!machine && !machineError;
   const available = connected && !busy && !working && jogCount === 0;
   const jogAvailable = connected && !busy && !working && jogCount < 4;
@@ -184,25 +198,17 @@ export function MachinePage({
   return (
     <>
       <Heading title="机器控制">
-        检测设备，将笔尖对到刻度区域左上角，再设置工作原点。
+        准备连接、笔尖与工作原点。移动前检查设备周围和纸张。
       </Heading>
       {busy && <Notice>机器正在书写，手动控制和串口扫描暂不可用。</Notice>}
-      <details
-        className="connection-drawer"
-        open={connectionExpanded}
-        onToggle={(event) => setConnectionExpanded(event.currentTarget.open)}
-      >
-        <summary>
-          连接信息 ·{" "}
-          {machineError ? "设备不可用" : machine?.state.state || "尚未读取"} ·{" "}
-          {machine?.port || ports.data?.configured_port || "—"}
-        </summary>
+      <section className="connection-section">
+        <h2>设备连接</h2>
         <ResourceState
           loading={ports.loading}
           error={ports.error}
           retry={ports.reload}
         />
-        <div className="inline-fields">
+        <div className="inline-fields serial-fields">
           <label className="field">
             <span>串口</span>
             <select
@@ -273,15 +279,20 @@ export function MachinePage({
             </dd>
           </div>
           <div>
-            <dt>连接</dt>
+            <dt>已保存串口配置</dt>
             <dd>
-              {machine?.port || ports.data?.configured_port || "—"} /{" "}
-              {ports.data?.baud || "—"}
+              {ports.data?.configured_port === "auto"
+                ? "自动识别"
+                : ports.data?.configured_port || "—"}{" "}
+              / {ports.data?.baud || "—"}
             </dd>
           </div>
           <div>
-            <dt>固件</dt>
-            <dd>{machine?.firmware.join(" · ") || "—"}</dd>
+            <dt>实际串口 · 固件</dt>
+            <dd>
+              {machine?.port || "未知"} ·{" "}
+              {machine?.firmware.join(" · ") || "尚未读取"}
+            </dd>
           </div>
           <div>
             <dt>最近备份</dt>
@@ -290,13 +301,15 @@ export function MachinePage({
             </dd>
           </div>
         </dl>
-      </details>
+        {!connected && (
+          <p className="muted connection-hint">
+            设备状态未确认：先检测串口或读取设备状态，再进行点动与原点准备。
+          </p>
+        )}
+      </section>
       <div className="machine-workspace">
         <section className="tool-section">
-          <h2>点动</h2>
-          <p className="muted">
-            以下操作直接控制真实设备，移动前检查当天备份。连续点动按点击顺序执行。
-          </p>
+          <h2>点动与原点准备</h2>
           <div className="coordinates">
             {["X", "Y", "Z"].map((axis, index) => (
               <div key={axis}>
@@ -306,59 +319,72 @@ export function MachinePage({
               </div>
             ))}
           </div>
-          <label className="field step-select">
-            <span>单次移动</span>
-            <select
-              value={step}
-              onChange={(event) => setStep(Number(event.target.value))}
-            >
-              {[1, 5, 10, 30].map((value) => (
-                <option key={value} value={value}>
-                  {value} mm
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="jog-pad">
-            <Button
-              className="jog-up"
-              disabled={!jogAvailable}
-              aria-label={`Y 正向移动 ${step} 毫米`}
-              onClick={() => enqueueJog("y", step)}
-            >
-              ↑
-            </Button>
-            <Button
-              className="jog-left"
-              disabled={!jogAvailable}
-              aria-label={`X 负向移动 ${step} 毫米`}
-              onClick={() => enqueueJog("x", -step)}
-            >
-              ←
-            </Button>
-            <span>X / Y</span>
-            <Button
-              className="jog-right"
-              disabled={!jogAvailable}
-              aria-label={`X 正向移动 ${step} 毫米`}
-              onClick={() => enqueueJog("x", step)}
-            >
-              →
-            </Button>
-            <Button
-              className="jog-down"
-              disabled={!jogAvailable}
-              aria-label={`Y 负向移动 ${step} 毫米`}
-              onClick={() => enqueueJog("y", -step)}
-            >
-              ↓
-            </Button>
+          <div className="jog-controls">
+            <div className="jog-pad">
+              <Button
+                className="jog-up"
+                disabled={!jogAvailable}
+                aria-label={`Y 正向移动 ${step} 毫米`}
+                onClick={() => enqueueJog("y", step)}
+              >
+                <WorkspaceIcon name="arrow-up" />
+              </Button>
+              <Button
+                className="jog-left"
+                disabled={!jogAvailable}
+                aria-label={`X 负向移动 ${step} 毫米`}
+                onClick={() => enqueueJog("x", -step)}
+              >
+                <WorkspaceIcon name="arrow-left" />
+              </Button>
+              <span>
+                X<br />Y
+              </span>
+              <Button
+                className="jog-right"
+                disabled={!jogAvailable}
+                aria-label={`X 正向移动 ${step} 毫米`}
+                onClick={() => enqueueJog("x", step)}
+              >
+                <WorkspaceIcon name="arrow-right" />
+              </Button>
+              <Button
+                className="jog-down"
+                disabled={!jogAvailable}
+                aria-label={`Y 负向移动 ${step} 毫米`}
+                onClick={() => enqueueJog("y", -step)}
+              >
+                <WorkspaceIcon name="arrow-down" />
+              </Button>
+            </div>
+            <div className="jog-options">
+              <label className="field step-select">
+                <span>单次移动</span>
+                <select
+                  value={step}
+                  onChange={(event) => setStep(Number(event.target.value))}
+                >
+                  {[1, 5, 10, 30].map((value) => (
+                    <option key={value} value={value}>
+                      {value} mm
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="muted" role="status">
+                {jogCount
+                  ? `正在点动 · 等待 ${jogCount - 1} 次`
+                  : "按点击顺序执行，最多等待 3 次点动。"}
+              </p>
+              <p className="muted">
+                {!connected
+                  ? "坐标尚未读取 · 点动不可用"
+                  : busy
+                    ? "书写中 · 点动不可用"
+                    : "坐标已读取"}
+              </p>
+            </div>
           </div>
-          <p className="muted" role="status">
-            {jogCount
-              ? `正在点动 · 等待 ${jogCount - 1} 次`
-              : "可连续点击方向，最多等待 3 次点动。"}
-          </p>
           {jogCount > 1 && (
             <Button
               onClick={() => {
@@ -391,9 +417,9 @@ export function MachinePage({
             >
               落笔
             </Button>
-            <Button disabled={!available} onClick={() => setZero(true)}>
-              设为原点
-            </Button>
+            <span className="muted">直接移动 Z 轴</span>
+          </div>
+          <div className="action-row origin-actions">
             <Button
               disabled={!available}
               onClick={() =>
@@ -405,32 +431,44 @@ export function MachinePage({
               }
             >
               移回原点
+            </Button>{" "}
+            <Button disabled={!available} onClick={() => setZero(true)}>
+              设为原点
             </Button>
+            <span className="muted">设为原点将重新定义工作坐标</span>
           </div>
-        </section>
-        <section className="tool-section">
-          <h2>机器维护</h2>
-          <p>
-            备份包含控制板参数、坐标和工作模式。恢复解除 Hold / Alarm
-            并抬笔，不会自动续写。
+          <p className="muted origin-hint">
+            先将笔尖对到纸面刻度区域左上角，再按现有规则设置工作原点。
           </p>
-          <div className="action-row">
+        </section>
+        <section className="tool-section maintenance-section">
+          <h2>机器维护</h2>
+          <p className="muted">最近备份</p>
+          <p>{machine?.backup || "暂无备份"}</p>
+          <div className="maintenance-actions">
             <Button
-              disabled={busy || working || jogCount > 0}
+              disabled={!connected || busy || working || jogCount > 0}
               onClick={() =>
                 void action("/api/admin/backup", undefined, "机器设置已备份")
               }
             >
               备份机器设置
             </Button>
+            <p className="muted">备份控制板参数、坐标与工作模式。</p>
+            <div className="section-divider" />
             <Button
-              disabled={busy || working || jogCount > 0}
+              disabled={
+                (!machine && !machineError) || busy || working || jogCount > 0
+              }
               onClick={() => void action("/api/admin/recover", {}, "恢复结果")}
             >
               解除卡死 / 恢复
             </Button>
           </div>
-          <p className="muted">备份参数可在参数设置中预览、确认后写回。</p>
+          <p>解除 Hold / Alarm 并抬笔，不会自动续写。</p>
+          <p className="muted">
+            恢复备份参数：前往参数设置，预览并确认后写回。
+          </p>
         </section>
       </div>
       {zero && (
@@ -745,7 +783,7 @@ export function SettingsPage({
   return (
     <>
       <Heading title="参数设置">
-        软件参数独立保存；高级 GRBL 参数预览后确认写入。
+        软件参数独立保存；控制板参数在预览后确认写入。
       </Heading>
       <ResourceState
         loading={config.loading}
@@ -820,36 +858,62 @@ function SettingsEditor({
   return (
     <>
       <section className="tool-section">
-        <h2>软件书写参数</h2>
+        <div className="settings-heading">
+          <h2>软件书写参数</h2>
+          <span className="muted">本机配置 · 非设备实时读取值</span>
+        </div>
         <p className="muted">
           保存到本地配置，不写入控制板。已入队任务保留原参数。
         </p>
-        <div className="settings-grid">
-          {fields.map((field) => (
-            <label className="field" key={field.key}>
-              <span>
-                {field.label}
-                <small>{field.unit}</small>
-              </span>
-              <input
-                aria-label={field.label}
-                aria-describedby={`help-${field.key}`}
-                type="number"
-                value={values[field.key]}
-                min={field.min}
-                max={field.max}
-                step={field.step}
-                onChange={(event) =>
-                  setValues((old) => ({
-                    ...old,
-                    [field.key]: Number(event.target.value),
-                  }))
-                }
-              />
-              <small id={`help-${field.key}`}>{field.help}</small>
-            </label>
-          ))}
-        </div>
+        {[
+          { title: "笔尖位置", labels: ["抬笔高度", "落笔高度"] },
+          { title: "运动速度", labels: ["书写速度", "空走速度", "抬落笔速度"] },
+          { title: "笔画与框线", labels: ["每笔停顿", "表格框线分段长度"] },
+        ].map((group) => (
+          <section className="settings-group" key={group.title}>
+            <h3>{group.title}</h3>
+            {group.labels.map((label) => {
+              const field = fields.find((f) => f.label === label);
+              if (!field) return null;
+              const help: Record<string, string> = {
+                抬笔高度: "笔尖离纸高度；以不蹭纸为准。",
+                落笔高度:
+                  "按本机机构映射，当前值越大压得越深；避免戳纸和损伤笔尖。",
+                书写速度: "落笔画线速度；设备上限尚未读取。",
+                空走速度: "抬笔状态下移动，不改变笔迹。",
+                抬落笔速度: "Z 轴升降速度；过快可能冲击笔尖或丢步。",
+                每笔停顿: "每笔结束后的停顿；0 表示不停顿。",
+                表格框线分段长度: "每段抬笔后从端点继续；仅作用于表格框线。",
+              };
+              return (
+                <label className="settings-row" key={field.key}>
+                  <span>{field.label}</span>
+                  <div className="settings-value">
+                    <input
+                      aria-label={field.label}
+                      aria-describedby={`help-${field.key}`}
+                      type="number"
+                      value={values[field.key]}
+                      min={field.min}
+                      max={field.max}
+                      step={field.step}
+                      onChange={(event) =>
+                        setValues((old) => ({
+                          ...old,
+                          [field.key]: Number(event.target.value),
+                        }))
+                      }
+                    />
+                    <span>{field.unit}</span>
+                  </div>
+                  <small id={`help-${field.key}`}>
+                    {help[field.label] || field.help}
+                  </small>
+                </label>
+              );
+            })}
+          </section>
+        ))}
         <div className="action-row">
           <Button kind="primary" disabled={saving} onClick={() => void save()}>
             {saving ? "正在保存…" : "保存软件参数"}
@@ -857,10 +921,15 @@ function SettingsEditor({
           <Button disabled={saving} onClick={reload}>
             重新读取
           </Button>
+          <span className="muted settings-save-hint">修改后须手动保存</span>
         </div>
       </section>
-      <section className="tool-section">
-        <h2>高级 GRBL 参数</h2>
+      <details className="advanced-settings">
+        <summary>
+          <span>高级 GRBL 参数</span>
+          <span className="muted">预览 → 备份 → 确认写入</span>
+        </summary>
+        <p className="muted">参数编号、目标值、备份与写入预览位于展开区。</p>
         <p>预览待发送指令，确认时先备份，再写入控制板。</p>
         <div className="inline-fields">
           <label className="field">
@@ -915,7 +984,10 @@ function SettingsEditor({
         <p className="muted">
           恢复备份时，将备份中的参数编号与值逐项填入，预览后确认写回。
         </p>
-      </section>
+      </details>
+      <p className="muted advanced-hint">
+        参数编号、目标值、备份与写入预览位于展开区。
+      </p>
       {preview && (
         <Dialog
           title="确认写入控制板"

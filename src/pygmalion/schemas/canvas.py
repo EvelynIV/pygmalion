@@ -16,13 +16,16 @@ class Element(Model):
     y_mm: float = 20
     width_mm: float = Field(default=100, gt=0, le=297)
     height_mm: float = Field(default=50, gt=0, le=297)
+
+
+class TextElement(Element):
     font: str = Field(default="", max_length=240)
     font_size_mm: float = Field(default=8, ge=4, le=40)
     char_gap_mm: float = Field(default=0, ge=0, le=20)
     line_gap_mm: float = Field(default=3, ge=0, le=30)
 
 
-class TextBox(Element):
+class TextBox(TextElement):
     type: Literal["text"] = "text"
     text: str = Field(default="", max_length=20000)
     align: Literal["left", "center", "right"] = "left"
@@ -38,7 +41,7 @@ class TableCell(Model):
     valign: Literal["top", "center", "bottom"] = "center"
 
 
-class Table(Element):
+class Table(TextElement):
     type: Literal["table"] = "table"
     column_widths: list[float] = Field(min_length=1, max_length=40)
     row_heights: list[float] = Field(min_length=1, max_length=80)
@@ -74,7 +77,47 @@ class Table(Element):
         return self
 
 
-CanvasElement = Annotated[TextBox | Table, Field(discriminator="type")]
+class Vector(Element):
+    type: Literal["vector"] = "vector"
+    name: str = Field(default="矢量图", max_length=120)
+    paths: list[str] = Field(min_length=1, max_length=1000)
+    lock_aspect: bool = True
+    fill_rules: list[Literal["nonzero", "evenodd"] | None] = Field(
+        default_factory=list, max_length=1000
+    )
+    draw_mode: Literal["outline", "solid"] = "outline"
+    pen_width_mm: float = Field(default=0.3, ge=0.05, le=3)
+    fill_spacing_mm: float = Field(default=0.24, ge=0.05, le=3)
+    fill_angle_deg: float = Field(default=0, ge=-180, le=180)
+
+    @model_validator(mode="after")
+    def valid_paths(self):
+        from .vector import MAX_SEGMENTS, checked_path
+
+        if self.fill_rules and len(self.fill_rules) != len(self.paths):
+            raise ValueError("填充规则必须与路径一一对应")
+        if self.draw_mode == "solid" and not any(self.fill_rules):
+            raise ValueError("缺少填充区域，请重新导入带填充信息的 SVG")
+        if sum(map(len, self.paths)) > 1000000:
+            raise ValueError("矢量路径数据过大")
+        count = 0
+        for data in self.paths:
+            path = checked_path(data)
+            count += len(path)
+            box = path.bbox()
+            if box and (min(box) < -1e-6 or max(box) > 1 + 1e-6):
+                raise ValueError("矢量路径必须位于归一化外框内")
+        if count > MAX_SEGMENTS:
+            raise ValueError("矢量路径过于复杂")
+        return self
+
+
+class SvgImportRequest(Model):
+    source: str = Field(max_length=1000000)
+    name: str = Field(default="矢量图", max_length=120)
+
+
+CanvasElement = Annotated[TextBox | Table | Vector, Field(discriminator="type")]
 
 
 class CanvasDocument(Model):
@@ -88,8 +131,17 @@ class CanvasDocument(Model):
     def valid_document(self):
         if len({e.id for e in self.elements}) != len(self.elements):
             raise ValueError("元素 ID 不能重复")
+        if (
+            sum(sum(map(len, e.paths)) for e in self.elements if isinstance(e, Vector))
+            > 1000000
+        ):
+            raise ValueError("整页矢量路径数据不能超过 1 MB")
         text_length = sum(
-            len(e.text) if isinstance(e, TextBox) else sum(len(c.text) for c in e.cells)
+            len(e.text)
+            if isinstance(e, TextBox)
+            else sum(len(c.text) for c in e.cells)
+            if isinstance(e, Table)
+            else 0
             for e in self.elements
         )
         if text_length > 20000:
@@ -99,7 +151,11 @@ class CanvasDocument(Model):
     @property
     def body(self):
         return "\n".join(
-            e.text if isinstance(e, TextBox) else "\n".join(c.text for c in e.cells)
+            e.text
+            if isinstance(e, TextBox)
+            else "\n".join(c.text for c in e.cells)
+            if isinstance(e, Table)
+            else ""
             for e in self.elements
         )
 

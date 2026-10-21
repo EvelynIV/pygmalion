@@ -33,7 +33,50 @@ export interface Table extends Geometry, TextStyle {
   padding_mm: number;
   draw_borders: boolean;
 }
-export type PaperElement = TextBox | Table;
+export interface VectorElement extends Geometry {
+  type: "vector";
+  name: string;
+  paths: string[];
+  lock_aspect: boolean;
+  fill_rules?: ("nonzero" | "evenodd" | null)[];
+  draw_mode?: "outline" | "solid";
+  pen_width_mm?: number;
+  fill_spacing_mm?: number;
+  fill_angle_deg?: number;
+}
+export type PaperElement = TextBox | Table | VectorElement;
+export function elementName(e: PaperElement) {
+  return e.type === "text" ? "文本框" : e.type === "table" ? "表格" : "矢量图";
+}
+export function newVector(
+  d: WritingDocument,
+  data: Pick<
+    VectorElement,
+    "name" | "paths" | "width_mm" | "height_mm" | "fill_rules" | "draw_mode"
+  >,
+): VectorElement {
+  const [w, h] = pageSize(d);
+  const ratio = Math.min(
+    1,
+    (w - 2 * d.margin_mm) / data.width_mm,
+    (h - 2 * d.margin_mm) / data.height_mm,
+  );
+  const width = data.width_mm * ratio,
+    height = data.height_mm * ratio;
+  return {
+    ...data,
+    type: "vector",
+    id: crypto.randomUUID(),
+    lock_aspect: true,
+    pen_width_mm: 0.3,
+    fill_spacing_mm: 0.24,
+    fill_angle_deg: 0,
+    width_mm: width,
+    height_mm: height,
+    x_mm: placement(d, width, height).x,
+    y_mm: placement(d, width, height).y,
+  };
+}
 export interface WritingDocument {
   version: 2;
   name: string;
@@ -145,7 +188,13 @@ export function resizeElement(
   width: number,
   height: number,
 ): PaperElement {
-  return e.type === "text"
+  if (e.type === "vector" && e.lock_aspect) {
+    const ratio =
+      width !== e.width_mm ? width / e.width_mm : height / e.height_mm;
+    width = e.width_mm * ratio;
+    height = e.height_mm * ratio;
+  }
+  return e.type !== "table"
     ? { ...e, width_mm: width, height_mm: height }
     : {
         ...e,
@@ -331,25 +380,61 @@ export function readDocument(raw: unknown): WritingDocument {
     throw new Error("文档字段不正确");
   const ids = new Set<string>();
   let count = 0;
+  let vectorSize = 0;
   for (const e of d.elements) {
     if (
       !e ||
       !string(e.id, 120) ||
       !e.id ||
       ids.has(e.id) ||
-      !["text", "table"].includes(e.type) ||
+      !["text", "table", "vector"].includes(e.type) ||
       !Number.isFinite(e.x_mm) ||
       !Number.isFinite(e.y_mm) ||
       !finite(e.width_mm, 0.001, 297) ||
       !finite(e.height_mm, 0.001, 297) ||
-      !string(e.font, 240) ||
-      !finite(e.font_size_mm, 4, 40) ||
-      !finite(e.char_gap_mm, 0, 20) ||
-      !finite(e.line_gap_mm, 0, 30)
+      (e.type !== "vector" &&
+        (!string(e.font, 240) ||
+          !finite(e.font_size_mm, 4, 40) ||
+          !finite(e.char_gap_mm, 0, 20) ||
+          !finite(e.line_gap_mm, 0, 30)))
     )
       throw new Error("元素内容或尺寸不正确");
     ids.add(e.id);
-    if (e.type === "text") {
+    if (e.type === "vector") {
+      if (
+        !string(e.name, 120) ||
+        typeof e.lock_aspect !== "boolean" ||
+        !Array.isArray(e.paths) ||
+        !e.paths.length ||
+        e.paths.length > 1000 ||
+        !e.paths.every(
+          (p) =>
+            string(p, 1000000) &&
+            /^[Mm]/.test(p.trim()) &&
+            !/[^MmLlHhVvCcSsQqTtAaZz0-9eE+.,\s-]/.test(p),
+        ) ||
+        e.paths.reduce((n, p) => n + p.length, 0) > 1000000
+      )
+        throw new Error("矢量图路径格式不正确");
+      if (
+        (e.fill_rules !== undefined &&
+          (!Array.isArray(e.fill_rules) ||
+            (e.fill_rules.length !== 0 &&
+              e.fill_rules.length !== e.paths.length) ||
+            !e.fill_rules.every(
+              (r) => r === null || r === "nonzero" || r === "evenodd",
+            ))) ||
+        (e.draw_mode !== undefined &&
+          !["outline", "solid"].includes(e.draw_mode)) ||
+        (e.draw_mode === "solid" && !e.fill_rules?.some(Boolean)) ||
+        (e.pen_width_mm !== undefined && !finite(e.pen_width_mm, 0.05, 3)) ||
+        (e.fill_spacing_mm !== undefined &&
+          !finite(e.fill_spacing_mm, 0.05, 3)) ||
+        (e.fill_angle_deg !== undefined && !finite(e.fill_angle_deg, -180, 180))
+      )
+        throw new Error("矢量图填充设置不正确");
+      vectorSize += e.paths.reduce((n, p) => n + p.length, 0);
+    } else if (e.type === "text") {
       if (!string(e.text) || !["left", "center", "right"].includes(e.align))
         throw new Error("文本框格式不正确");
       count += e.text.length;
@@ -402,6 +487,7 @@ export function readDocument(raw: unknown): WritingDocument {
         throw new Error("表格单元格不完整");
     }
   }
+  if (vectorSize > 1000000) throw new Error("整页矢量路径数据不能超过 1 MB");
   if (count > 20000) throw new Error("整页文字不能超过20000字符");
   return structuredClone(d);
 }

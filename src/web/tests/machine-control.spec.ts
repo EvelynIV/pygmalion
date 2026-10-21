@@ -63,7 +63,7 @@ test("连续换方向全部走同一个 WebSocket，坐标直接更新", async (
       }),
     );
   await expect(
-    page.getByText("可连续点击方向，最多等待 3 次点动。"),
+    page.getByText("按点击顺序执行，最多等待 3 次点动。"),
   ).toBeVisible();
   await expect(page.locator(".coordinates strong").nth(1)).toHaveText("1");
   peer!.send(

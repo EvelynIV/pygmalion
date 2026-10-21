@@ -16,10 +16,15 @@ function layoutKey(document: WritingDocument) {
     elements: document.elements.map((element) =>
       element.type === "text"
         ? { ...element, text: undefined }
-        : {
-            ...element,
-            cells: element.cells.map((cell) => ({ ...cell, text: undefined })),
-          },
+        : element.type !== "table"
+          ? element
+          : {
+              ...element,
+              cells: element.cells.map((cell) => ({
+                ...cell,
+                text: undefined,
+              })),
+            },
     ),
   });
 }

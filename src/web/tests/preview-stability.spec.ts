@@ -322,7 +322,7 @@ test("布局、打开文件及清空文档不会沿用不兼容的旧图", async
   next.name = "另一个文档";
   next.elements[0].cells[0].text = "丙";
   gate = deferred();
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.getByLabel("文档文件", { exact: true }).setInputFiles({
     name: "next.pygmalion.json",
     mimeType: "application/json",
     buffer: Buffer.from(JSON.stringify(next)),
