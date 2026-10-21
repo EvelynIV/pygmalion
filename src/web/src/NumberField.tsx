@@ -22,7 +22,13 @@ export function NumberFieldsProvider({
   );
 }
 
-function validate(text: string, min: number, max: number, final = false) {
+function validate(
+  text: string,
+  min: number,
+  max: number,
+  final = false,
+  unit = "mm",
+) {
   const trimmed = text.trim();
   const partial =
     /^[+-]?(?:\d+\.)?$/.test(trimmed) || /^[+-]?\.$/.test(trimmed);
@@ -35,7 +41,7 @@ function validate(text: string, min: number, max: number, final = false) {
   const value = Number(trimmed);
   if (!Number.isFinite(value) || value < min || value > max)
     return {
-      error: `请输入 ${Number(min.toFixed(3))}–${Number(max.toFixed(3))} mm 范围内的数值`,
+      error: `请输入 ${Number(min.toFixed(3))}–${Number(max.toFixed(3))} ${unit} 范围内的数值`,
       invalid: true,
     };
   return { value, invalid: false, error: undefined };
@@ -48,8 +54,14 @@ export function NumberField({
   max = 297,
   change,
   disabled = false,
+  displayLabel,
+  step = 0.1,
+  unit = "mm",
 }: {
   label: string;
+  displayLabel?: string;
+  step?: number;
+  unit?: string;
   value: number;
   min?: number;
   max?: number;
@@ -71,7 +83,7 @@ export function NumberField({
       final: false,
     });
   }
-  const checked = validate(draft.text, min, max, draft.final);
+  const checked = validate(draft.text, min, max, draft.final, unit);
   useEffect(() => {
     report(
       id,
@@ -83,7 +95,7 @@ export function NumberField({
   useEffect(() => () => report(id), [report, id]);
 
   function update(text: string, final = false) {
-    const next = validate(text, min, max, final);
+    const next = validate(text, min, max, final, unit);
     report(
       id,
       next.invalid ? `${label}：${next.error || "请完成数值输入"}` : undefined,
@@ -96,8 +108,11 @@ export function NumberField({
     if (next.value !== undefined) change(next.value);
   }
   return (
-    <label className="compact-field">
-      <span>{label}</span>
+    <label
+      title={label}
+      className={`compact-field${displayLabel ? " inline-number" : ""}`}
+    >
+      <span>{displayLabel || label}</span>
       <div className="dimension-value">
         <input
           aria-label={label}
@@ -112,7 +127,24 @@ export function NumberField({
           onBlur={() => update(draft.text, true)}
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing) return;
-            if (event.key === "Enter") {
+            if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+              event.preventDefault();
+              const direction = event.key === "ArrowUp" ? 1 : -1;
+              update(
+                String(
+                  Number(
+                    Math.max(
+                      min,
+                      Math.min(
+                        max,
+                        (checked.value ?? value) + direction * step,
+                      ),
+                    ).toFixed(3),
+                  ),
+                ),
+                true,
+              );
+            } else if (event.key === "Enter") {
               event.preventDefault();
               event.stopPropagation();
               update(draft.text, true);
@@ -128,7 +160,7 @@ export function NumberField({
             }
           }}
         />
-        <span>mm</span>
+        <span>{unit}</span>
       </div>
       {checked.error && (
         <small className="number-field-error" id={`${id}-error`}>

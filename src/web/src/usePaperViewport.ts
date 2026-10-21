@@ -34,7 +34,7 @@ export function usePaperViewport(width: number, height: number) {
         event.isComposing ||
         event.keyCode === 229 ||
         event.repeat ||
-        document.querySelector('[role="dialog"]')
+        document.querySelector('dialog[open],[role="dialog"]')
       )
         return;
       if (event.key === "Escape" && hand) {
@@ -135,15 +135,20 @@ export function usePaperViewport(width: number, height: number) {
   useEffect(() => {
     const element = stage.current;
     if (!element) return;
-    const resize = () =>
+    const resize = () => {
+      const style = getComputedStyle(element);
+      const horizontalPadding =
+        parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      const verticalPadding =
+        parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
       setScale(
         zoom === "fit"
           ? Math.max(
               MIN_SCALE,
               Math.min(
                 MAX_SCALE,
-                (element.clientWidth - 32) / width,
-                (element.clientHeight - 32) / height,
+                (element.clientWidth - horizontalPadding) / width,
+                (element.clientHeight - verticalPadding) / height,
               ),
             )
           : Math.max(
@@ -151,6 +156,7 @@ export function usePaperViewport(width: number, height: number) {
               Math.min(MAX_SCALE, Number(zoom) * PIXELS_PER_MM),
             ),
       );
+    };
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     resize();

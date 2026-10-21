@@ -4,6 +4,8 @@ import { usePaperPreview } from "./usePaperPreview";
 
 import {
   blank,
+  newVector,
+  type VectorElement,
   readDocument,
   type WritingDocument,
   type PaperElement,
@@ -208,7 +210,7 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
   }
   function replaceText(id: string, text: string, row?: number, col?: number) {
     const element = latest.current.elements.find((item) => item.id === id);
-    if (!element) return;
+    if (!element || element.type === "vector") return;
     replaceElement(
       element.type === "text"
         ? { ...element, text }
@@ -317,8 +319,9 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
     }
   }
   async function open(input: File) {
+    const baseline = latest.current;
     try {
-      if (input.size > 256000) throw new Error("文档文件过大");
+      if (input.size > 4_000_000) throw new Error("文档文件过大");
       const text = await input.text();
       const next = input.name.toLowerCase().endsWith(".txt")
         ? readDocument({
@@ -328,6 +331,10 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
             body: text,
           })
         : readDocument(JSON.parse(text));
+      if (next.elements.some((e) => e.type === "vector"))
+        await api("/api/workbench/validate", next);
+      if (latest.current !== baseline)
+        throw new Error("文档已变化，请重新打开文件");
       if (lockedRef.current) {
         notify("书写中无法打开文档", true);
         return;
@@ -346,6 +353,62 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
       );
     } catch (e) {
       notify(e instanceof Error ? e.message : "无法打开文档", true);
+    }
+  }
+  const [importing, setImporting] = useState(false);
+  const importPending = useRef(false);
+  async function importSvg(input: File): Promise<string | undefined> {
+    if (lockedRef.current || importPending.current) return;
+    const baseline = latest.current;
+    importPending.current = true;
+    setImporting(true);
+    try {
+      if (input.size > 1_000_000) throw new Error("SVG 文件不能超过 1 MB");
+      const result = await api<
+        Pick<
+          VectorElement,
+          | "name"
+          | "paths"
+          | "width_mm"
+          | "height_mm"
+          | "fill_rules"
+          | "draw_mode"
+        >
+      >("/api/workbench/import-svg", {
+        source: await input.text(),
+        name: input.name.replace(/\.svg$/i, "").slice(0, 120),
+      });
+      if (lockedRef.current || latest.current !== baseline)
+        throw new Error("文档已变化，请重新导入 SVG");
+      if (latest.current.elements.length >= 100)
+        throw new Error("纸面最多支持 100 个元素");
+      const vector = newVector(latest.current, result);
+      const next = {
+        ...latest.current,
+        elements: [...latest.current.elements, vector],
+      };
+      readDocument(next);
+      // 在改变文档前验证本机存储空间；失败时保留原文档。
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(next));
+      } catch {
+        throw new Error(
+          "SVG 导入失败：本机存储空间不足或不可用，请先导出当前文档",
+        );
+      }
+      endEdit();
+      commit(next);
+      notify(
+        result.draw_mode === "solid"
+          ? "SVG 已导入：实心填充绘制"
+          : "SVG 已导入：轮廓绘制",
+      );
+      return vector.id;
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "SVG 导入失败", true);
+    } finally {
+      importPending.current = false;
+      setImporting(false);
     }
   }
   const canWrite =
@@ -383,6 +446,8 @@ export function useWorkbench({ busy, jobs, notify, refresh }: Props) {
   }
   return {
     document,
+    importSvg,
+    importing,
     change,
     commit,
     replaceElement,

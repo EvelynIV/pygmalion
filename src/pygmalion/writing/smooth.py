@@ -315,5 +315,5 @@ def smooth_strokes(strokes, **kwargs):
     out = []
     for s in strokes:
         pts = smooth_polyline(s.points, **kwargs)
-        out.append(Stroke(points=pts, role=s.role))
+        out.append(Stroke(points=pts, role=s.role, width_mm=s.width_mm))
     return out
