@@ -125,3 +125,12 @@ def fit_document_table(data: FitRequest):
         }
     except ValueError as exc:
         raise ServiceError("invalid", {"error": str(exc)})
+
+
+def import_vector(data):
+    from ..drawing.svg import import_svg
+
+    try:
+        return {"name": data.name, **import_svg(data.source)}
+    except ValueError as exc:
+        raise ServiceError("invalid", {"error": str(exc)})

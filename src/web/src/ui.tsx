@@ -1,6 +1,7 @@
 import {
   useEffect,
   useRef,
+  useId,
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
@@ -17,6 +18,7 @@ export function Link({
   children: ReactNode;
   className?: string;
   "aria-current"?: "page";
+  title?: string;
 }) {
   return (
     <a
@@ -55,6 +57,106 @@ export function Button({
     />
   );
 }
+export function WorkspaceIcon({
+  name,
+  size = 20,
+}: {
+  name: string;
+  size?: number;
+}) {
+  return (
+    <span className="workspace-icon" aria-hidden="true">
+      <img
+        className="light-asset"
+        src={`/design/current/${name}.svg`}
+        width={size}
+        height={size}
+        alt=""
+      />
+      <img
+        className="night-asset"
+        src={`/design/current/${name}-night.svg`}
+        width={size}
+        height={size}
+        alt=""
+      />
+    </span>
+  );
+}
+
+export function Help({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <span className="context-help">
+      <Button kind="ghost" aria-label={label} aria-describedby={id}>
+        {label === "纸面编辑帮助" ? "帮助 ?" : "?"}
+      </Button>
+      <span className="help-content" id={id} role="tooltip">
+        {children}
+      </span>
+    </span>
+  );
+}
+
+export function AlignmentGroup({
+  label,
+  value,
+  options,
+  change,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string; icon: string }[];
+  change: (value: string) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="alignment-options"
+      onKeyDown={(event) => {
+        const index = options.findIndex((option) => option.value === value);
+        let next: number;
+        if (["ArrowLeft", "ArrowUp"].includes(event.key))
+          next = (index + options.length - 1) % options.length;
+        else if (["ArrowRight", "ArrowDown"].includes(event.key))
+          next = (index + 1) % options.length;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = options.length - 1;
+        else return;
+        event.preventDefault();
+        change(options[next].value);
+        const buttons =
+          event.currentTarget.querySelectorAll<HTMLButtonElement>(
+            '[role="radio"]',
+          );
+        buttons[next].focus();
+      }}
+    >
+      {options.map((option) => (
+        <Button
+          key={option.value}
+          kind="ghost"
+          role="radio"
+          aria-label={option.label}
+          title={option.label}
+          aria-checked={value === option.value}
+          tabIndex={value === option.value ? 0 : -1}
+          onClick={() => change(option.value)}
+        >
+          <WorkspaceIcon size={18} name={option.icon} />
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 export function DesignIcon({
   name,
   selected = false,

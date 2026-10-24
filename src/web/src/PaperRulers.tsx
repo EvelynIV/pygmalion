@@ -1,4 +1,4 @@
-const RULER_SIZE = 32;
+const RULER_SIZE = 24;
 
 export function PaperRulers({
   width,
@@ -13,7 +13,7 @@ export function PaperRulers({
   view: { x: number; y: number; width: number; height: number };
   cursor?: { x: number; y: number };
 }) {
-  const minor = scale >= 2.5 ? 1 : scale >= 0.7 ? 5 : 10;
+  const minor = scale >= 5 ? 1 : scale >= 0.7 ? 5 : 10;
   const labels = [10, 20, 50, 100].find((step) => step * scale >= 36) || 100;
   function ticks(length: number, offset: number, vertical: boolean) {
     return Array.from(

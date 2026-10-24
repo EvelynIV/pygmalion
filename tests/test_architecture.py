@@ -44,7 +44,15 @@ def test_package_dependency_boundaries():
                 and not name.startswith("pygmalion.schemas")
                 for name in dependencies
             ), path
-        if group in {"servicer", "machine", "jobs", "writing", "fonts", "schemas"}:
+        if group in {
+            "servicer",
+            "machine",
+            "jobs",
+            "writing",
+            "fonts",
+            "schemas",
+            "drawing",
+        }:
             assert not any(
                 name.split(".")[0] in {"fastapi", "starlette", "uvicorn"}
                 for name in dependencies
@@ -53,7 +61,7 @@ def test_package_dependency_boundaries():
                 name.startswith(("pygmalion.api", "pygmalion.commands"))
                 for name in dependencies
             ), path
-        if group in {"machine", "jobs", "writing", "fonts"}:
+        if group in {"machine", "jobs", "writing", "fonts", "drawing"}:
             assert not any(
                 name.startswith("pygmalion.servicer") for name in dependencies
             ), path
@@ -87,6 +95,7 @@ def test_package_dependency_boundaries():
                         "pygmalion.jobs",
                         "pygmalion.submissions",
                         "pygmalion.writing",
+                        "pygmalion.drawing",
                         "pygmalion.fonts",
                     )
                 )

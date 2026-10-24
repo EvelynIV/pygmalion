@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 
 ROLE_TITLE = "title"
@@ -28,6 +29,7 @@ class Stroke:
 
     points: list[tuple[float, float]]
     role: str = ROLE_BODY
+    width_mm: float = 0.35
 
 
 @dataclass

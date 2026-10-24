@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from .models import PageConfig, Stroke
 
 
@@ -24,7 +25,7 @@ def strokes_to_svg(
         if len(pts) < 2:
             continue
         d = "M " + " L ".join(f"{x:.3f},{y:.3f}" for x, y in pts)
-        paths.append(f'<path d="{d}"/>')
+        paths.append(f'<path d="{d}" stroke-width="{s.width_mm:g}"/>')
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w:g} {h:g}"
      width="100%" height="100%" preserveAspectRatio="xMidYMid meet">

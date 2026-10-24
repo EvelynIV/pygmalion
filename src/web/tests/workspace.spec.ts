@@ -82,7 +82,7 @@ test("纸面编辑：文本框、拖放、缩放、撤销重做、保存和演�
   const saved = await exportDocument(page);
   await page.getByRole("button", { name: "新建", exact: true }).click();
   await expect(page.locator(".paper-element")).toHaveCount(0);
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.getByLabel("文档文件", { exact: true }).setInputFiles({
     name: "saved.pygmalion.json",
     mimeType: "application/json",
     buffer: Buffer.from(JSON.stringify(saved)),
@@ -186,7 +186,7 @@ test("旧文档迁移横排及键盘编辑和合并", async ({ page }) => {
     line_gap_mm: 3,
     margin_mm: 20,
   };
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.getByLabel("文档文件", { exact: true }).setInputFiles({
     name: "old.json",
     mimeType: "application/json",
     buffer: Buffer.from(JSON.stringify(old)),
@@ -246,6 +246,7 @@ test("软件参数保存与离线 GRBL 预览可审阅", async ({ page }) => {
   await page.getByLabel("书写速度", { exact: true }).fill("1200");
   await page.getByRole("button", { name: "保存软件参数" }).click();
   await expect(page.getByText("软件参数已保存")).toBeVisible();
+  await page.getByText("高级 GRBL 参数", { exact: true }).click();
   await page.getByRole("button", { name: "预览写入" }).click();
   await expect(page.getByRole("dialog")).toContainText("$110=4000");
   await page.getByRole("button", { name: "取消", exact: true }).click();
@@ -424,7 +425,7 @@ test("Ctrl滚轮只缩放纸面，毫米刻度随滚动对齐且文档尺寸不�
     py = rect.y + (100 * 96) / 25.4;
   await page.mouse.move(px, py);
   await expect(page.getByLabel("纸面坐标", { exact: true })).toContainText(
-    "X 50.00 mm · Y 100.00 mm",
+    "50.00, 100.00 mm",
   );
   const prevented = await stage.evaluate(
     (el) =>

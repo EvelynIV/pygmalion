@@ -4,14 +4,16 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { PaperRulers } from "./PaperRulers";
 import { NumberField, NumberFieldsProvider } from "./NumberField";
 import { usePaperViewport } from "./usePaperViewport";
 import { useResource, type Fonts } from "./api";
-import { Button, Dialog, Link } from "./ui";
+import { Button, Dialog, Help, AlignmentGroup } from "./ui";
 import { useWorkbench } from "./useWorkbench";
 import {
   newText,
+  elementName,
   newTable,
   pageSize,
   resizeElement,
@@ -88,8 +90,7 @@ function InlineEditor({
 }
 type WorkbenchProps = {
   model: WorkbenchModel;
-  deviceText: string;
-  port: string;
+  documentHost: HTMLDivElement | null;
   busy: boolean;
 };
 
@@ -101,12 +102,7 @@ export function Workbench(props: WorkbenchProps) {
   );
 }
 
-function WorkbenchContent({
-  model: m,
-  deviceText,
-  port,
-  busy,
-}: WorkbenchProps) {
+function WorkbenchContent({ model: m, documentHost, busy }: WorkbenchProps) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -124,7 +120,8 @@ function WorkbenchContent({
       const target = event.target instanceof Element ? event.target : null;
       if (
         target?.closest('input,textarea,select,[contenteditable="true"]') &&
-        !root.current?.contains(target)
+        !root.current?.contains(target) &&
+        !target.closest(".document-toolbar")
       )
         return;
       event.preventDefault();
@@ -138,6 +135,60 @@ function WorkbenchContent({
   }, [m]);
   const d = m.document;
   const [selected, setSelected] = useState<string>();
+  const [allSelected, setAllSelected] = useState<string[]>([]);
+  const selectedCount = d.elements.filter((e) =>
+    allSelected.includes(e.id),
+  ).length;
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (
+        event.isComposing ||
+        event.keyCode === 229 ||
+        m.composing ||
+        event.altKey ||
+        document.querySelector('dialog[open],[role="dialog"]') ||
+        target?.closest(
+          'input,textarea,select,[contenteditable]:not([contenteditable="false"])',
+        )
+      )
+        return;
+      const all =
+        (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a";
+      const remove =
+        !event.ctrlKey &&
+        !event.metaKey &&
+        (event.key === "Delete" || event.key === "Backspace");
+      if (!all && !remove) return;
+      const ids = allSelected.length ? allSelected : selected ? [selected] : [];
+      if (
+        remove &&
+        !ids.some((id) => m.document.elements.some((e) => e.id === id))
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (m.locked || pointer.current) return;
+      m.endEdit();
+      setEditing(undefined);
+      setCellSelection([]);
+      setExtendSelection(false);
+      setSelected(undefined);
+      if (all) setAllSelected(m.document.elements.map((e) => e.id));
+      else {
+        m.change(
+          "elements",
+          m.document.elements.filter((e) => !ids.includes(e.id)),
+        );
+        setAllSelected([]);
+      }
+      root.current
+        ?.querySelector<HTMLElement>(".page-preview")
+        ?.focus({ preventScroll: true });
+    };
+    document.addEventListener("keydown", shortcut, true);
+    return () => document.removeEventListener("keydown", shortcut, true);
+  }, [m, selected, allSelected]);
   const [extendSelection, setExtendSelection] = useState(false);
   const [cellSelection, setCellSelection] = useState<
     { row: number; col: number }[]
@@ -147,13 +198,16 @@ function WorkbenchContent({
     row?: number;
     col?: number;
   }>();
+  const [fitHelp, setFitHelp] = useState(false);
   const [discard, setDiscard] = useState<"new" | "open">();
   const [deletion, setDeletion] = useState<{
     table: Table;
     axis: "row" | "col";
     index: number;
   }>();
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(
+    () => window.matchMedia("(min-width: 651px)").matches,
+  );
 
   const [drag, setDrag] = useState<PaperElement>();
   const dragValue = useRef<PaperElement | undefined>(undefined);
@@ -168,6 +222,7 @@ function WorkbenchContent({
     | undefined
   >(undefined);
   const file = useRef<HTMLInputElement>(null);
+  const svgFile = useRef<HTMLInputElement>(null);
   const fonts = useResource<Fonts>("/api/fonts");
   const [width, height] = pageSize(d);
   const viewport = usePaperViewport(width, height);
@@ -184,7 +239,9 @@ function WorkbenchContent({
     m.endEdit();
     m.setComposing(false);
     setSelected(id);
-    setInspectorOpen(!!id);
+    setAllSelected([]);
+    if (id && window.matchMedia("(min-width: 651px)").matches)
+      setInspectorOpen(true);
     setExtendSelection(false);
     setCellSelection([]);
     setEditing(undefined);
@@ -224,7 +281,8 @@ function WorkbenchContent({
     m.setComposing(false);
     setEditing(undefined);
     setSelected(t.id);
-    setInspectorOpen(true);
+    setAllSelected([]);
+    if (window.matchMedia("(min-width: 651px)").matches) setInspectorOpen(true);
     if (range && selected === t.id && activeCell) {
       const r0 = Math.min(activeCell.row, c.row),
         c0 = Math.min(activeCell.col, c.col),
@@ -259,6 +317,7 @@ function WorkbenchContent({
     e.preventDefault();
     e.stopPropagation();
     setSelected(element.id);
+    setAllSelected([]);
     setEditing(undefined);
     e.currentTarget.setPointerCapture(e.pointerId);
     pointer.current = { x: e.clientX, y: e.clientY, element, mode, index };
@@ -304,6 +363,21 @@ function WorkbenchContent({
       sizes[i] += delta;
       sizes[i + 1] -= delta;
       next = { ...el, [key]: sizes };
+    }
+    if (p.mode === "resize" && next.type === "vector" && next.lock_aspect) {
+      const fit = Math.max(
+        0.001 / Math.min(next.width_mm, next.height_mm),
+        Math.min(
+          1,
+          (width - d.margin_mm - next.x_mm) / next.width_mm,
+          (height - d.margin_mm - next.y_mm) / next.height_mm,
+        ),
+      );
+      next = {
+        ...next,
+        width_mm: next.width_mm * fit,
+        height_mm: next.height_mm * fit,
+      };
     }
     dragValue.current = next;
     setDrag(next);
@@ -366,7 +440,7 @@ function WorkbenchContent({
   const feedback = m.error
     ? "预览失败：" + m.error + (m.previewUrl ? "；当前显示上次成功预览" : "")
     : !d.elements.length
-      ? "添加文本框或表格，开始编排纸面"
+      ? "添加文本框、表格或导入 SVG，开始编排纸面"
       : !m.preview
         ? m.previewUrl
           ? "正在更新笔画预览…"
@@ -380,7 +454,7 @@ function WorkbenchContent({
             ? "没有可绘制的内容"
             : busy
               ? "当前纸面与机器参数已冻结"
-              : "● 内容位于可书写区域内";
+              : "✓ 内容位于可书写区域内";
   return (
     <div
       ref={root}
@@ -402,60 +476,61 @@ function WorkbenchContent({
           m.endEdit(target.getAttribute("aria-label") || target.name);
       }}
     >
-      <div className="document-toolbar">
-        <input
-          className="document-name"
-          aria-label="文档名称"
-          value={d.name}
-          maxLength={120}
-          disabled={m.locked}
-          onChange={(e) => m.change("name", e.target.value)}
-        />
-        <span
-          className="document-save-status muted"
-          aria-live="polite"
-          title={m.saveError}
-        >
-          {Object.keys(m.inputErrors).length
-            ? "有尚未生效的数值，请修正后保存或书写"
-            : m.saveError
-              ? "自动保存失败，文字暂留本页"
-              : m.locallySaved
-                ? "已自动保存到本机"
-                : "尚未自动保存"}
-          {m.saveError && (
-            <Button kind="ghost" onClick={m.retrySave}>
-              重试保存
-            </Button>
-          )}
-        </span>
-        <div className="document-actions">
-          <Button
-            kind="ghost"
-            disabled={m.locked}
-            onClick={() => request("new")}
-          >
-            新建
-          </Button>
-          <Button
-            kind="ghost"
-            disabled={m.locked}
-            onClick={() => request("open")}
-          >
-            打开
-          </Button>
-          <Button
-            kind="ghost"
-            disabled={m.locked || !!Object.keys(m.inputErrors).length}
-            onClick={m.save}
-          >
-            保存
-          </Button>
-        </div>
-        <Link className="quick-device muted" href="/admin/machine">
-          ● {deviceText} · {port === "auto" ? "自动串口" : port}
-        </Link>
-      </div>
+      {documentHost &&
+        createPortal(
+          <div className="document-toolbar">
+            <input
+              className="document-name"
+              aria-label="文档名称"
+              value={d.name}
+              maxLength={120}
+              disabled={m.locked}
+              onChange={(e) => m.change("name", e.target.value)}
+            />
+            <span
+              className="document-save-status muted"
+              aria-live="polite"
+              title={m.saveError}
+            >
+              {Object.keys(m.inputErrors).length
+                ? "有尚未生效的数值，请修正后保存或书写"
+                : m.saveError
+                  ? "自动保存失败，内容暂留本页"
+                  : m.locallySaved
+                    ? "已自动保存"
+                    : "尚未自动保存"}
+              {m.saveError && (
+                <Button kind="ghost" onClick={m.retrySave}>
+                  重试保存
+                </Button>
+              )}
+            </span>
+            <div className="document-actions">
+              <Button
+                kind="ghost"
+                disabled={m.locked}
+                onClick={() => request("new")}
+              >
+                新建
+              </Button>
+              <Button
+                kind="ghost"
+                disabled={m.locked}
+                onClick={() => request("open")}
+              >
+                打开
+              </Button>
+              <Button
+                kind="ghost"
+                disabled={m.locked || !!Object.keys(m.inputErrors).length}
+                onClick={m.save}
+              >
+                保存
+              </Button>
+            </div>
+          </div>,
+          documentHost,
+        )}
       <div className="canvas-tools" role="toolbar" aria-label="纸面工具">
         <Button
           disabled={m.locked || d.elements.length >= 100}
@@ -478,14 +553,35 @@ function WorkbenchContent({
         >
           添加表格
         </Button>
+        <input
+          ref={svgFile}
+          type="file"
+          accept=".svg,image/svg+xml"
+          hidden
+          aria-label="SVG 文件"
+          onChange={async (event) => {
+            const input = event.target.files?.[0];
+            event.target.value = "";
+            if (input) {
+              const id = await m.importSvg(input);
+              if (id) select(id);
+            }
+          }}
+        />
         <Button
-          className="inspector-toggle"
-          kind="ghost"
-          aria-expanded={inspectorOpen}
-          aria-controls="paper-inspector"
-          onClick={() => setInspectorOpen((v) => !v)}
+          disabled={m.locked || m.importing || d.elements.length >= 100}
+          onClick={() => svgFile.current?.click()}
         >
-          纸面与属性
+          {m.importing ? "导入中…" : "导入 SVG"}
+        </Button>
+        <Button
+          kind="ghost"
+          className="selection-tool"
+          aria-label="选择工具"
+          aria-pressed={!viewport.hand}
+          onClick={() => viewport.setHand(false)}
+        >
+          选择
         </Button>
         <Button
           kind="ghost"
@@ -495,7 +591,6 @@ function WorkbenchContent({
         >
           小手 H
         </Button>
-        <span className="tool-divider" />
         <Button
           kind="ghost"
           disabled={m.locked || !m.canUndo}
@@ -516,8 +611,10 @@ function WorkbenchContent({
         >
           重做
         </Button>
+        <span className="paper-size-label muted">
+          {d.paper} · {width} × {height} mm
+        </span>
         <label className="canvas-zoom">
-          视图{" "}
           <select
             aria-label="纸面缩放"
             value={zoom}
@@ -534,10 +631,16 @@ function WorkbenchContent({
             <option value="3">300%</option>
             <option value="4">400%</option>
           </select>
-        </label>
-        <span className="muted">
-          {d.paper} · {width} × {height} mm
-        </span>
+        </label>{" "}
+        <Button
+          className="inspector-toggle"
+          kind="ghost"
+          aria-expanded={inspectorOpen}
+          aria-controls="paper-inspector"
+          onClick={() => setInspectorOpen((v) => !v)}
+        >
+          属性
+        </Button>
       </div>
       <div
         className={"canvas-columns " + (inspectorOpen ? "inspector-open" : "")}
@@ -545,6 +648,7 @@ function WorkbenchContent({
         <section
           className="page-preview"
           aria-label="纸面编辑器"
+          tabIndex={-1}
           onKeyDown={(e) => {
             if (
               m.locked ||
@@ -554,14 +658,6 @@ function WorkbenchContent({
             )
               return;
             if (e.key === "Escape") select();
-            if (element && (e.key === "Delete" || e.key === "Backspace")) {
-              e.preventDefault();
-              m.change(
-                "elements",
-                d.elements.filter((v) => v.id !== element.id),
-              );
-              select();
-            }
           }}
         >
           <div className="paper-viewport">
@@ -616,7 +712,8 @@ function WorkbenchContent({
                 )}
                 {d.elements.map((original) => {
                   const el = drag?.id === original.id ? drag : original,
-                    isSelected = selected === el.id,
+                    isSelected =
+                      selected === el.id || allSelected.includes(el.id),
                     invalid = errors.some((v) => v.element_id === el.id);
                   const isEditing = !m.locked && editing?.id === el.id;
                   return (
@@ -635,7 +732,14 @@ function WorkbenchContent({
                         height: el.height_mm * scale,
                       }}
                     >
-                      {el.type === "text" ? (
+                      {el.type === "vector" ? (
+                        <button
+                          className="text-hit-target vector-hit-target"
+                          disabled={m.locked}
+                          aria-label={"矢量图：" + el.name}
+                          onClick={() => select(el.id)}
+                        />
+                      ) : el.type === "text" ? (
                         isEditing ? (
                           <InlineEditor
                             key={el.id}
@@ -808,7 +912,7 @@ function WorkbenchContent({
                               </div>
                             );
                           })}
-                          {isSelected &&
+                          {selected === el.id &&
                             !m.locked &&
                             (["row", "col"] as const).flatMap((axis) => {
                               const sizes =
@@ -840,13 +944,11 @@ function WorkbenchContent({
                             })}
                         </div>
                       )}
-                      {isSelected && (
+                      {selected === el.id && (
                         <>
                           <button
                             className="element-grip"
-                            aria-label={
-                              el.type === "text" ? "移动文本框" : "移动表格"
-                            }
+                            aria-label={"移动" + elementName(el)}
                             disabled={m.locked}
                             onPointerDown={(e) => begin(e, original, "move")}
                             {...dragProps}
@@ -869,7 +971,7 @@ function WorkbenchContent({
                               }
                             }}
                           >
-                            ⠿ {el.type === "text" ? "文本框" : "表格"}
+                            ⠿ {elementName(el)}
                           </button>
                           <button
                             className="element-resize"
@@ -894,361 +996,572 @@ function WorkbenchContent({
             role={m.error || errors.length ? "alert" : "status"}
           >
             <p>{feedback}</p>
-            <p className="paper-coordinate-readout" aria-label="纸面坐标">
+            <div className="paper-coordinate-readout" aria-label="纸面坐标">
               {viewport.cursor
-                ? `X ${viewport.cursor.x.toFixed(2)} mm · Y ${viewport.cursor.y.toFixed(2)} mm`
-                : "纸张左上角为 0, 0 · 单位 mm"}{" "}
-              · Ctrl / ⌘ + 滚轮缩放纸面 · H 小手平移 / Esc 选择
-            </p>
-            <p className="muted">
-              单击输入；Shift 点击选择多个单元格；虚线和选择框不落笔。
-            </p>
+                ? `${viewport.cursor.x.toFixed(2)}, ${viewport.cursor.y.toFixed(2)} mm`
+                : "0, 0 mm"}
+              <Help label="纸面编辑帮助">
+                纸张左上角为 0, 0。Ctrl / ⌘ + 滚轮缩放纸张，H 小手平移，Esc
+                选择。单击输入；Shift 点击选择多个单元格；虚线和选择框不落笔。
+              </Help>
+            </div>
           </div>
         </section>
         <aside
           id="paper-inspector"
           className="single-page-inspector canvas-inspector"
           aria-label="纸面与元素设置"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setInspectorOpen(false);
+              document
+                .querySelector<HTMLButtonElement>(".inspector-toggle")
+                ?.focus();
+            }
+          }}
         >
-          <details open={!element}>
-            <summary>纸面设置</summary>
-            <fieldset key={m.inputEpoch} disabled={m.locked}>
-              <label className="compact-field">
-                <span>纸张</span>
-                <select
-                  aria-label="纸张"
-                  value={d.paper}
-                  onChange={(e) =>
-                    m.change("paper", e.target.value as "A4" | "A5")
-                  }
-                >
-                  <option value="A4">A4 · 210 × 297 mm</option>
-                  <option value="A5">A5 · 148 × 210 mm</option>
-                </select>
-              </label>
-              <NumberField
-                label="统一页边距"
-                value={d.margin_mm}
-                max={60}
-                change={(v) => m.change("margin_mm", v)}
-              />
-            </fieldset>
-          </details>
-          {element ? (
-            <>
-              <h2>{element.type === "text" ? "文本框设置" : "表格设置"}</h2>
-              <fieldset
-                key={`${m.inputEpoch}:${element.id}:${activeCell?.row}:${activeCell?.col}`}
-                disabled={m.locked}
-              >
-                <div className="dimension-grid">
-                  {(
-                    [
-                      ["x_mm", "横向位置"],
-                      ["y_mm", "纵向位置"],
-                      ["width_mm", "宽度"],
-                      ["height_mm", "高度"],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <NumberField
-                      key={key}
-                      label={label}
-                      value={element[key]}
-                      min={key === "width_mm" || key === "height_mm" ? 0.5 : 0}
-                      change={(v) =>
-                        key === "width_mm" || key === "height_mm"
-                          ? m.replaceElement(
-                              resizeElement(
-                                element,
-                                key === "width_mm" ? v : element.width_mm,
-                                key === "height_mm" ? v : element.height_mm,
-                              ),
-                            )
-                          : patch({ [key]: v })
-                      }
-                    />
-                  ))}
-                </div>
+          <div className="inspector-content">
+            <div className="inspector-identity">
+              <h2>
+                {selectedCount
+                  ? `已选 ${selectedCount} 个元素`
+                  : element
+                    ? elementName(element)
+                    : "纸面设置"}
+              </h2>
+              {selectedCount > 0 && (
+                <p className="muted" role="status">
+                  Backspace / Delete 删除选中元素，Esc 取消选择。
+                </p>
+              )}
+              {table && (
+                <p className="muted">
+                  {table.row_heights.length} 行 × {table.column_widths.length}{" "}
+                  列 · 已选 {chosenCells.length} 格
+                </p>
+              )}
+            </div>
+            <details open={!element}>
+              <summary>
+                纸面设置 <span className="muted">{d.paper} · 页边距</span>
+              </summary>
+              <fieldset key={m.inputEpoch} disabled={m.locked}>
                 <label className="compact-field">
-                  <span>字体</span>
+                  <span>纸张</span>
                   <select
-                    aria-label="字体"
-                    value={element.font}
-                    onChange={(e) => patch({ font: e.target.value })}
+                    aria-label="纸张"
+                    value={d.paper}
+                    onChange={(e) =>
+                      m.change("paper", e.target.value as "A4" | "A5")
+                    }
                   >
-                    <option value="">数据集默认字体</option>
-                    {fonts.data?.fonts.map((f) => (
-                      <option key={f.id} value={f.id} disabled={!f.available}>
-                        {f.label}
-                      </option>
-                    ))}
+                    <option value="A4">A4 · 210 × 297 mm</option>
+                    <option value="A5">A5 · 148 × 210 mm</option>
                   </select>
-                  {fonts.error && (
-                    <small>
-                      字体列表读取失败{" "}
-                      <Button kind="ghost" onClick={fonts.reload}>
-                        重试
-                      </Button>
-                    </small>
-                  )}
                 </label>
-                <div className="dimension-grid">
-                  {(
-                    [
-                      ["font_size_mm", "字号", 4, 40],
-                      ["char_gap_mm", "字间距", 0, 20],
-                      ["line_gap_mm", "行间距", 0, 30],
-                    ] as const
-                  ).map(([key, label, min, max]) => (
-                    <NumberField
-                      key={key}
-                      label={label}
-                      value={element[key]}
-                      min={min}
-                      max={max}
-                      change={(v) => patch({ [key]: v })}
-                    />
-                  ))}
-                </div>
-                {element.type === "text" && (
-                  <label className="compact-field">
-                    <span>对齐</span>
-                    <select
-                      aria-label="文本对齐"
-                      value={element.align}
-                      onChange={(e) =>
-                        patch({
-                          align: e.target.value as "left" | "center" | "right",
-                        })
-                      }
-                    >
-                      <option value="left">左对齐</option>
-                      <option value="center">居中</option>
-                      <option value="right">右对齐</option>
-                    </select>
-                  </label>
-                )}
-                {table && (
-                  <>
-                    <label className="canvas-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={table.draw_borders}
-                        onChange={(e) =>
-                          patch({ draw_borders: e.target.checked })
+                <NumberField
+                  label="统一页边距"
+                  value={d.margin_mm}
+                  max={60}
+                  change={(v) => m.change("margin_mm", v)}
+                />
+              </fieldset>
+            </details>
+            {element ? (
+              <>
+                <fieldset
+                  key={`${m.inputEpoch}:${element.id}:${activeCell?.row}:${activeCell?.col}`}
+                  disabled={m.locked}
+                >
+                  <div className="property-heading">
+                    <h3>位置与尺寸</h3>
+                    <span>整{table ? "表" : "框"}</span>
+                  </div>
+                  <div className="dimension-grid position-fields">
+                    {(
+                      [
+                        ["x_mm", "横向位置"],
+                        ["y_mm", "纵向位置"],
+                        ["width_mm", "宽度"],
+                        ["height_mm", "高度"],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <NumberField
+                        key={key}
+                        label={label}
+                        displayLabel={
+                          {
+                            x_mm: "X",
+                            y_mm: "Y",
+                            width_mm: "W",
+                            height_mm: "H",
+                          }[key]
+                        }
+                        value={element[key]}
+                        max={
+                          element.type === "vector" && element.lock_aspect
+                            ? key === "width_mm"
+                              ? Math.min(
+                                  297,
+                                  (297 * element.width_mm) / element.height_mm,
+                                )
+                              : key === "height_mm"
+                                ? Math.min(
+                                    297,
+                                    (297 * element.height_mm) /
+                                      element.width_mm,
+                                  )
+                                : 297
+                            : 297
+                        }
+                        min={
+                          key === "width_mm" || key === "height_mm"
+                            ? element.type === "vector"
+                              ? 0.001 *
+                                (element.lock_aspect
+                                  ? Math.max(
+                                      1,
+                                      key === "width_mm"
+                                        ? element.width_mm / element.height_mm
+                                        : element.height_mm / element.width_mm,
+                                    )
+                                  : 1)
+                              : 0.5
+                            : 0
+                        }
+                        change={(v) =>
+                          key === "width_mm" || key === "height_mm"
+                            ? m.replaceElement(
+                                resizeElement(
+                                  element,
+                                  key === "width_mm" ? v : element.width_mm,
+                                  key === "height_mm" ? v : element.height_mm,
+                                ),
+                              )
+                            : patch({ [key]: v })
                         }
                       />
-                      实际书写表格线
+                    ))}
+                  </div>
+                  {element.type === "vector" && (
+                    <>
+                      <label className="compact-field vector-name">
+                        <span>名称</span>
+                        <input
+                          type="text"
+                          aria-label="矢量图名称"
+                          value={element.name}
+                          maxLength={120}
+                          onChange={(e) => patch({ name: e.target.value })}
+                        />
+                      </label>
+                      <label className="canvas-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={element.lock_aspect}
+                          onChange={(e) =>
+                            patch({ lock_aspect: e.target.checked })
+                          }
+                        />
+                        锁定宽高比
+                      </label>
+                      <label className="compact-field">
+                        <span>绘制模式</span>
+                        <select
+                          aria-label="绘制模式"
+                          value={element.draw_mode ?? "outline"}
+                          onChange={(e) =>
+                            patch({
+                              draw_mode: e.target.value as "outline" | "solid",
+                            })
+                          }
+                        >
+                          <option value="outline">轮廓</option>
+                          <option
+                            value="solid"
+                            disabled={!element.fill_rules?.some(Boolean)}
+                          >
+                            实心填充
+                          </option>
+                        </select>
+                      </label>
+                      {!element.fill_rules?.some(Boolean) && (
+                        <p className="muted">
+                          没有填充区域；如需实心绘制，请重新导入带填充信息的
+                          SVG。
+                        </p>
+                      )}
+                      <NumberField
+                        label="笔迹宽度"
+                        value={element.pen_width_mm ?? 0.3}
+                        min={0.05}
+                        max={3}
+                        step={0.05}
+                        change={(v) => patch({ pen_width_mm: v })}
+                      />
+                      {element.draw_mode === "solid" && (
+                        <>
+                          <NumberField
+                            label="填充间距"
+                            value={element.fill_spacing_mm ?? 0.24}
+                            min={0.05}
+                            max={3}
+                            step={0.01}
+                            change={(v) => patch({ fill_spacing_mm: v })}
+                          />
+                          <NumberField
+                            label="填充角度"
+                            unit="°"
+                            value={element.fill_angle_deg ?? 0}
+                            min={-180}
+                            max={180}
+                            step={1}
+                            change={(v) => patch({ fill_angle_deg: v })}
+                          />
+                          <p className="muted">
+                            建议间距不超过笔迹宽度的
+                            80%；过小的孔洞可能受实际笔宽影响。
+                          </p>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {element.type !== "vector" && (
+                    <>
+                      <div className="property-heading">
+                        <h3>文字</h3>
+                        <span>整{table ? "表" : "框"}</span>
+                      </div>
+                      <label className="compact-field font-field">
+                        <span className="sr-only">字体</span>
+                        <select
+                          aria-label="字体"
+                          value={element.font}
+                          onChange={(e) => patch({ font: e.target.value })}
+                        >
+                          <option value="">数据集默认字体</option>
+                          {fonts.data?.fonts.map((f) => (
+                            <option
+                              key={f.id}
+                              value={f.id}
+                              disabled={!f.available}
+                            >
+                              {f.label}
+                            </option>
+                          ))}
+                        </select>
+                        {fonts.error && (
+                          <small>
+                            字体列表读取失败{" "}
+                            <Button kind="ghost" onClick={fonts.reload}>
+                              重试
+                            </Button>
+                          </small>
+                        )}
+                      </label>
+                      <div className="dimension-grid font-fields">
+                        {(
+                          [
+                            ["font_size_mm", "字号", 4, 40],
+                            ["char_gap_mm", "字间距", 0, 20],
+                            ["line_gap_mm", "行间距", 0, 30],
+                          ] as const
+                        ).map(([key, label, min, max]) => (
+                          <NumberField
+                            key={key}
+                            label={label}
+                            value={element[key]}
+                            min={min}
+                            max={max}
+                            change={(v) => patch({ [key]: v })}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {element.type === "text" && (
+                    <label className="compact-field">
+                      <span>对齐</span>
+                      <select
+                        aria-label="文本对齐"
+                        value={element.align}
+                        onChange={(e) =>
+                          patch({
+                            align: e.target.value as
+                              "left" | "center" | "right",
+                          })
+                        }
+                      >
+                        <option value="left">左对齐</option>
+                        <option value="center">居中</option>
+                        <option value="right">右对齐</option>
+                      </select>
                     </label>
-                    <NumberField
-                      label="单元格内边距"
-                      value={table.padding_mm}
-                      max={10}
-                      change={(v) => patch({ padding_mm: v })}
-                    />
-                    <Button
-                      disabled={
-                        m.fitting || !!Object.keys(m.inputErrors).length
-                      }
-                      onClick={() => void m.fit(table.id)}
-                    >
-                      {m.fitting ? "正在计算…" : "自适应"}
-                    </Button>
-                    <p className="muted">
-                      固定外框，优先保持原布局和字号；放不下时调整行列，必要时缩小字号，最低
-                      4 mm。不会放大字号；仅点击时执行。
-                    </p>
+                  )}
+                  {table && (
+                    <div className="table-properties">
+                      <div className="property-heading">
+                        <h3>表格</h3>
+                        <span>整表</span>
+                      </div>
+                      <div className="border-option">
+                        <label className="canvas-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={table.draw_borders}
+                            onChange={(e) =>
+                              patch({ draw_borders: e.target.checked })
+                            }
+                          />
+                          实际书写表格线
+                        </label>
+                        <Help label="表格框线说明">
+                          默认书写框线。每段抬笔，从同一端点续画，保持实线；分段长度在参数设置中修改，默认
+                          5 mm。
+                        </Help>
+                      </div>
+                      <NumberField
+                        label="单元格内边距"
+                        displayLabel="内边距"
+                        value={table.padding_mm}
+                        max={10}
+                        change={(v) => patch({ padding_mm: v })}
+                      />
+                      <div className="fit-actions">
+                        <Button
+                          disabled={
+                            m.fitting || !!Object.keys(m.inputErrors).length
+                          }
+                          onClick={() => void m.fit(table.id)}
+                        >
+                          {m.fitting ? "正在计算…" : "自适应"}
+                        </Button>
+                        <Button
+                          kind="ghost"
+                          onClick={() => setFitHelp((v) => !v)}
+                          aria-expanded={fitHelp}
+                          aria-controls="fit-rules"
+                        >
+                          规则 ›
+                        </Button>
+                      </div>
+                      <p className="muted" id="fit-rules">
+                        {fitHelp
+                          ? "保持外框，优先保留原布局和字号；放不下时调整行列，必要时缩小字号，最低 4 mm，不会放大。仅点击自适应时执行。"
+                          : "固定外框，不放大字号 · 最低 4 mm"}
+                      </p>
+                      <div className="track-actions">
+                        <span>行</span>
+                        <Button onClick={() => track("row", false)}>
+                          插入行
+                        </Button>
+                        <Button
+                          kind="ghost"
+                          disabled={table.row_heights.length === 1}
+                          onClick={() => track("row", true)}
+                        >
+                          删除行
+                        </Button>
+                        <span>列</span>
+                        <Button onClick={() => track("col", false)}>
+                          插入列
+                        </Button>
+                        <Button
+                          kind="ghost"
+                          disabled={table.column_widths.length === 1}
+                          onClick={() => track("col", true)}
+                        >
+                          删除列
+                        </Button>
+                      </div>
+                      <div className="property-heading">
+                        <h3>单元格</h3>
+                        <span>当前选区</span>
+                      </div>
+                      {activeCell && (
+                        <>
+                          <div className="selection-summary">
+                            <span>
+                              第 {activeCell.row + 1} 行，第{" "}
+                              {activeCell.col + 1} 列
+                            </span>
+                            <Button
+                              kind="ghost"
+                              aria-label="扩展单元格选区"
+                              aria-pressed={extendSelection}
+                              onClick={() => setExtendSelection((v) => !v)}
+                            >
+                              {extendSelection ? "结束扩展" : "扩展选区"}
+                            </Button>
+                          </div>
+                          <div className="dimension-grid">
+                            <NumberField
+                              label="当前行高"
+                              displayLabel="行高"
+                              value={table.row_heights[activeCell.row]}
+                              min={0.25}
+                              max={
+                                table.row_heights.length > 1
+                                  ? table.row_heights[activeCell.row] +
+                                    table.row_heights[
+                                      activeCell.row ===
+                                      table.row_heights.length - 1
+                                        ? activeCell.row - 1
+                                        : activeCell.row + 1
+                                    ] -
+                                    0.25
+                                  : table.height_mm
+                              }
+                              disabled={table.row_heights.length === 1}
+                              change={(v) => setTrack("row", activeCell.row, v)}
+                            />
+                            <NumberField
+                              label="当前列宽"
+                              displayLabel="列宽"
+                              value={table.column_widths[activeCell.col]}
+                              min={0.25}
+                              max={
+                                table.column_widths.length > 1
+                                  ? table.column_widths[activeCell.col] +
+                                    table.column_widths[
+                                      activeCell.col ===
+                                      table.column_widths.length - 1
+                                        ? activeCell.col - 1
+                                        : activeCell.col + 1
+                                    ] -
+                                    0.25
+                                  : table.width_mm
+                              }
+                              disabled={table.column_widths.length === 1}
+                              change={(v) => setTrack("col", activeCell.col, v)}
+                            />
+                          </div>
+                          <div className="table-actions">
+                            <Button
+                              disabled={chosenCells.length < 2}
+                              onClick={() =>
+                                safe(() => {
+                                  const next = mergeCells(table, chosenCells);
+                                  m.replaceElement(next);
+                                  setCellSelection([
+                                    {
+                                      row: Math.min(
+                                        ...chosenCells.map((c) => c.row),
+                                      ),
+                                      col: Math.min(
+                                        ...chosenCells.map((c) => c.col),
+                                      ),
+                                    },
+                                  ]);
+                                })
+                              }
+                            >
+                              合并单元格
+                            </Button>
+                            <Button
+                              disabled={
+                                chosenCells.length !== 1 ||
+                                (activeCell.rowspan === 1 &&
+                                  activeCell.colspan === 1)
+                              }
+                              onClick={() =>
+                                m.replaceElement(splitCell(table, activeCell))
+                              }
+                            >
+                              拆分单元格
+                            </Button>
+                          </div>
+                          {(
+                            [
+                              [
+                                "align",
+                                "水平对齐",
+                                ["left", "center", "right"],
+                                ["左对齐", "水平居中", "右对齐"],
+                              ],
+                              [
+                                "valign",
+                                "垂直对齐",
+                                ["top", "center", "bottom"],
+                                ["顶部对齐", "垂直居中", "底部对齐"],
+                              ],
+                            ] as const
+                          ).map(([key, label, options, names]) => (
+                            <div className="alignment-field" key={key}>
+                              <span>{label}</span>
+                              <AlignmentGroup
+                                label={`单元格${label}`}
+                                value={activeCell[key]}
+                                change={(value) => updateCell({ [key]: value })}
+                                options={options.map((value, index) => ({
+                                  value,
+                                  label: names[index],
+                                  icon: `align-${key === "valign" && value === "center" ? "middle" : value}`,
+                                }))}
+                              />
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="table-actions">
+                    {element.type !== "vector" && (
+                      <Button
+                        kind="ghost"
+                        onClick={() => {
+                          if (element.type === "text")
+                            setEditing({ id: element.id });
+                          else if (activeCell)
+                            setEditing({
+                              id: element.id,
+                              row: activeCell.row,
+                              col: activeCell.col,
+                            });
+                        }}
+                        disabled={element.type === "table" && !activeCell}
+                      >
+                        编辑内容
+                      </Button>
+                    )}
                     <Button
                       kind="ghost"
-                      aria-pressed={extendSelection}
-                      disabled={!activeCell}
-                      onClick={() => setExtendSelection((v) => !v)}
+                      onClick={() => {
+                        m.change(
+                          "elements",
+                          d.elements.filter((e) => e.id !== element.id),
+                        );
+                        select();
+                      }}
                     >
-                      {extendSelection ? "结束扩展选区" : "扩展单元格选区"}
+                      删除元素
                     </Button>
-                    <div className="table-actions">
-                      <Button onClick={() => track("row", false)}>
-                        插入行
-                      </Button>
-                      <Button onClick={() => track("col", false)}>
-                        插入列
-                      </Button>
-                      <Button
-                        disabled={table.row_heights.length === 1}
-                        onClick={() => track("row", true)}
-                      >
-                        删除行
-                      </Button>
-                      <Button
-                        disabled={table.column_widths.length === 1}
-                        onClick={() => track("col", true)}
-                      >
-                        删除列
-                      </Button>
-                    </div>
-                    {activeCell && (
-                      <>
-                        <p className="muted">
-                          已选 {chosenCells.length} 格 · 第 {activeCell.row + 1}{" "}
-                          行，第 {activeCell.col + 1} 列
-                        </p>
-                        <div className="table-actions">
-                          <Button
-                            disabled={chosenCells.length < 2}
-                            onClick={() =>
-                              safe(() => {
-                                const next = mergeCells(table, chosenCells);
-                                m.replaceElement(next);
-                                setCellSelection([
-                                  {
-                                    row: Math.min(
-                                      ...chosenCells.map((c) => c.row),
-                                    ),
-                                    col: Math.min(
-                                      ...chosenCells.map((c) => c.col),
-                                    ),
-                                  },
-                                ]);
-                              })
-                            }
-                          >
-                            合并单元格
-                          </Button>
-                          <Button
-                            disabled={
-                              chosenCells.length !== 1 ||
-                              (activeCell.rowspan === 1 &&
-                                activeCell.colspan === 1)
-                            }
-                            onClick={() =>
-                              m.replaceElement(splitCell(table, activeCell))
-                            }
-                          >
-                            拆分单元格
-                          </Button>
-                        </div>
-                        <div className="dimension-grid">
-                          <NumberField
-                            label="当前行高"
-                            value={table.row_heights[activeCell.row]}
-                            min={0.25}
-                            max={
-                              table.row_heights.length > 1
-                                ? table.row_heights[activeCell.row] +
-                                  table.row_heights[
-                                    activeCell.row ===
-                                    table.row_heights.length - 1
-                                      ? activeCell.row - 1
-                                      : activeCell.row + 1
-                                  ] -
-                                  0.25
-                                : table.height_mm
-                            }
-                            disabled={table.row_heights.length === 1}
-                            change={(v) => setTrack("row", activeCell.row, v)}
-                          />
-                          <NumberField
-                            label="当前列宽"
-                            value={table.column_widths[activeCell.col]}
-                            min={0.25}
-                            max={
-                              table.column_widths.length > 1
-                                ? table.column_widths[activeCell.col] +
-                                  table.column_widths[
-                                    activeCell.col ===
-                                    table.column_widths.length - 1
-                                      ? activeCell.col - 1
-                                      : activeCell.col + 1
-                                  ] -
-                                  0.25
-                                : table.width_mm
-                            }
-                            disabled={table.column_widths.length === 1}
-                            change={(v) => setTrack("col", activeCell.col, v)}
-                          />
-                        </div>
-                        <label className="compact-field">
-                          <span>单元格水平对齐</span>
-                          <select
-                            aria-label="单元格水平对齐"
-                            value={activeCell.align}
-                            onChange={(e) =>
-                              updateCell({
-                                align: e.target.value as Cell["align"],
-                              })
-                            }
-                          >
-                            <option value="left">左对齐</option>
-                            <option value="center">居中</option>
-                            <option value="right">右对齐</option>
-                          </select>
-                        </label>
-                        <label className="compact-field">
-                          <span>单元格垂直对齐</span>
-                          <select
-                            aria-label="单元格垂直对齐"
-                            value={activeCell.valign}
-                            onChange={(e) =>
-                              updateCell({
-                                valign: e.target.value as Cell["valign"],
-                              })
-                            }
-                          >
-                            <option value="top">顶部</option>
-                            <option value="center">居中</option>
-                            <option value="bottom">底部</option>
-                          </select>
-                        </label>
-                      </>
-                    )}
-                  </>
-                )}
-                <div className="table-actions">
-                  <Button
-                    kind="ghost"
-                    onClick={() => {
-                      if (element.type === "text")
-                        setEditing({ id: element.id });
-                      else if (activeCell)
-                        setEditing({
-                          id: element.id,
-                          row: activeCell.row,
-                          col: activeCell.col,
-                        });
-                    }}
-                    disabled={element.type === "table" && !activeCell}
-                  >
-                    编辑内容
-                  </Button>
-                  <Button
-                    kind="danger"
-                    onClick={() => {
-                      m.change(
-                        "elements",
-                        d.elements.filter((e) => e.id !== element.id),
-                      );
-                      select();
-                    }}
-                  >
-                    删除元素
-                  </Button>
-                </div>
-              </fieldset>
-            </>
-          ) : (
-            <p className="muted inspector-empty">
-              选择纸面上的文本框或表格，调整位置、尺寸和文字样式。
-            </p>
-          )}
-          <Button kind="ghost" onClick={m.reload}>
-            重新预览
-          </Button>
+                  </div>
+                </fieldset>
+              </>
+            ) : (
+              <p className="muted inspector-empty">
+                选择纸面上的文本框、表格或矢量图，调整位置和尺寸。
+              </p>
+            )}
+          </div>
+          <div className="inspector-preview">
+            <span className="muted">
+              {m.error
+                ? "预览失败"
+                : !m.preview
+                  ? "正在更新预览"
+                  : "预览已最新"}
+            </span>
+            <Button onClick={m.reload}>重新预览</Button>
+          </div>
         </aside>
       </div>
       <input
         type="file"
         hidden
         ref={file}
+        aria-label="文档文件"
         accept=".json,.txt"
         onChange={(e) => {
           const input = e.target.files?.[0];

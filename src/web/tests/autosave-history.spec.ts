@@ -39,9 +39,7 @@ test("逐字同步保存，预览失败和未失焦都不阻止刷新恢复", as
     expect((await inputAndRead(editor, value))[0].text).toBe(value);
     await expect(editor).toBeFocused();
   }
-  await expect(page.locator(".document-save-status")).toHaveText(
-    "已自动保存到本机",
-  );
+  await expect(page.locator(".document-save-status")).toHaveText("已自动保存");
   let dialogs = 0;
   page.on("dialog", async (dialog) => {
     dialogs++;
@@ -217,9 +215,7 @@ test("保存失败保留文字，导出仍可用，手动重试和下次输入�
   );
   await page.getByRole("button", { name: "重试保存", exact: true }).click();
   expect((await stored(page)).elements[0].text).toBe("甲乙");
-  await expect(page.locator(".document-save-status")).toHaveText(
-    "已自动保存到本机",
-  );
+  await expect(page.locator(".document-save-status")).toHaveText("已自动保存");
   expect(
     await page.evaluate(
       () =>
@@ -245,9 +241,7 @@ test("保存失败保留文字，导出仍可用，手动重试和下次输入�
   expect((await stored(page)).elements[0].text).toBe("甲乙");
   await editor.fill("甲乙丙丁");
   expect((await stored(page)).elements[0].text).toBe("甲乙丙丁");
-  await expect(page.locator(".document-save-status")).toHaveText(
-    "已自动保存到本机",
-  );
+  await expect(page.locator(".document-save-status")).toHaveText("已自动保存");
 });
 
 test("新建确认不受自动保存影响，取消保留逐字草稿，确认新建也立即持久化", async ({
@@ -303,9 +297,7 @@ test("超过既有文字上限时保留可恢复草稿，修正后自动保存�
   );
   expect((await stored(page)).elements[0].text).toBe("甲乙");
   await editor.fill("甲乙丙");
-  await expect(page.locator(".document-save-status")).toHaveText(
-    "已自动保存到本机",
-  );
+  await expect(page.locator(".document-save-status")).toHaveText("已自动保存");
   await page.reload();
   await expect(
     page.getByRole("button", { name: "文本框：甲乙丙", exact: true }),
